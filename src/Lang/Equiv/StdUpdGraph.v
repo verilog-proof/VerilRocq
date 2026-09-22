@@ -53,17 +53,6 @@ Section Equivalence.
       UGraphEventsStOk ug (nilR procs) st ->
       UGraphUpdCompl ug.
 
-  Definition UGraphOk: Prop :=
-    UGraphIpsWf decls funcs mtrss /\
-      UGraphIpsStWf decls funcs mtrss /\
-      UGraphUpdComplOk /\
-      (forall stb, UGraphBaseMono stb) /\
-      (forall ips initb, UGraphEventsOk
-                           (getUGraph decls funcs mtrss initb ips)
-                           (initsR (List.map fst ips))) /\
-      (forall stb ips, UpdfSub (getUGraph decls funcs mtrss true ips)
-                         (hupds stb (initState ips))).
-
   (*! Main proofs *)
 
   Lemma UGraphUpdOk_upd:
@@ -110,13 +99,13 @@ Section Equivalence.
     forall upds (Hupds: upds <> []) pproc,
       genEvalEvent (EventUpd upds) pproc = None ->
       forall pun,
-        UNodeProc decls funcs mtrss pun pproc ->
+        UNodeStd decls funcs mtrss pun pproc ->
         forall st cun,
           UNodeEventOk st cun (Some (EventUpd upds)) ->
           UNodeKeysOk cun ->
           forall v, In v (keys cun) -> In v (deps pun) -> False.
   Proof using .
-    unfold genEvalEvent, UNodeProc, UNodeEventOk, UNodeKeysOk; intros; dest.
+    unfold genEvalEvent, UNodeStd, UNodeEventOk, UNodeKeysOk; intros; dest.
     destruct (existsb (fun v => match hfind [HEltVid v] upds with
                                 | Some _ => true
                                 | None => false
@@ -143,7 +132,7 @@ Section Equivalence.
     forall upds (Hupds: upds <> []) pproc,
       genEvalEvent (EventUpd upds) pproc = None ->
       forall pun,
-        UNodeProc decls funcs mtrss pun pproc ->
+        UNodeStd decls funcs mtrss pun pproc ->
         forall st cun,
           UNodeEventOk st cun (Some (EventUpd upds)) ->
           UNodeKeysOk cun ->
@@ -187,7 +176,7 @@ Section Equivalence.
     forall upds (Hupds: upds <> []) pproc,
       genEvalEvent (EventUpd upds) pproc = None ->
       forall pun,
-        UNodeProc decls funcs mtrss pun pproc ->
+        UNodeStd decls funcs mtrss pun pproc ->
         forall st cun,
           UNodeEventOk st cun (Some (EventUpd upds)) ->
           UNodeKeysOk cun ->
@@ -231,13 +220,13 @@ Section Equivalence.
     forall upds (Hupds: upds <> []) pproc nev,
       genEvalEvent (EventUpd upds) pproc = Some nev ->
       forall pun,
-        UNodeProc decls funcs mtrss pun pproc ->
+        UNodeStd decls funcs mtrss pun pproc ->
         forall st cun,
           UNodeEventOk st cun (Some (EventUpd upds)) ->
           UNodeKeysOk cun ->
           exists v, In v (keys cun) /\ In v (deps pun).
   Proof using .
-    unfold genEvalEvent, UNodeProc, UNodeEventOk, UNodeKeysOk; intros; dest.
+    unfold genEvalEvent, UNodeStd, UNodeEventOk, UNodeKeysOk; intros; dest.
     destruct (existsb (fun v => match hfind [HEltVid v] upds with
                                 | Some _ => true
                                 | None => false
@@ -260,7 +249,7 @@ Section Equivalence.
       forall ug pun,
         UGraphUnique ug ->
         UNodeUpdOk ug pun ->
-        UNodeProc decls funcs mtrss pun pproc -> (* trig pproc = deps pun *)
+        UNodeStd decls funcs mtrss pun pproc -> (* trig pproc = deps pun *)
         forall st cun,
           In cun ug ->
           UNodeEventOk st cun (Some (EventUpd upds)) -> (* updf cun st = upds *)
@@ -288,7 +277,7 @@ Section Equivalence.
     forall upds (Hupds: upds <> []) pproc nev,
       genEvalEvent (EventUpd upds) pproc = Some nev ->
       forall pun,
-        UNodeProc decls funcs mtrss pun pproc ->
+        UNodeStd decls funcs mtrss pun pproc ->
         forall st cun,
           UNodeEventOk st cun (Some (EventUpd upds)) ->
           UNodeKeysOk cun ->
@@ -340,8 +329,8 @@ Section Equivalence.
                  UNodeEventOk s un oev /\ UNodeUpdEvCompl (tug1 ++ tun :: tug2) un oev) lug evs ->
       Forall (UNodeUpdOk (tug1 ++ tun :: tug2)) lug ->
       forall lprocs,
-        Forall (ProcWf decls funcs mtrss) lprocs ->
-        UGraphProcs decls funcs mtrss lug lprocs ->
+        Forall (fun _ : Process => True) lprocs ->
+        UGraphStd decls funcs mtrss lug lprocs ->
         forall upds (Hupds: upds <> []) nevs,
           UNodeEventOk s tun (Some (EventUpd upds)) ->
           GenEvalEvents (EventUpd upds) lprocs evs nevs ->
@@ -375,13 +364,13 @@ Section Equivalence.
         destruct oev as [ev|]; [destruct ev as [|eupds|]|].
         * exfalso; red in H3; auto.
         * red in H3; split.
-          { apply H15. }
+          { eapply H15; exact Hnev. }
           { intuition auto. }
         * red in H3; split.
-          { apply H15. }
+          { eapply H15; exact Hnev. }
           { intuition auto. }
         * red; split.
-          { apply H15. }
+          { eapply H15; exact Hnev. }
           { eapply genEvalEvent_Some_updDone_false; try eassumption.
             apply in_or_app; right.
             left; reflexivity.
@@ -399,12 +388,10 @@ Section Equivalence.
         * assumption.
         * destruct H3; subst eupds.
           split; [|intuition; fail].
-          red in H15; dest.
-          rewrite !H10. (* [updf un = ...] *)
-          (* [ProcWfTrigNone] *)
-          destruct H11 as [_ [_ [? _]]].
-          rewrite H11 by assumption.
-          reflexivity.
+          destruct H15 as [_ [Hsame _]].
+          apply Hsame; [|exact Hnev].
+          destruct H8 as [Hupd _]. rewrite <-Hupd.
+          apply UNodeKeysOk_HMapStrEmpty; exact Htun.
         * assumption.
         * red; auto.
 
@@ -423,10 +410,10 @@ Section Equivalence.
 
   Lemma ExecEvent_imp_EvalUGraphTrs_upd:
     forall procs ug1 evs1 upds (Hupds: upds <> []) evs2 s1,
-      Forall (ProcWf decls funcs mtrss) procs ->
+      Forall (fun _ : Process => True) procs ->
       UGraphUnique ug1 ->
       UGraphUpdOk ug1 ->
-      UGraphProcs decls funcs mtrss ug1 procs ->
+      UGraphStd decls funcs mtrss ug1 procs ->
       UGraphEventsStOk ug1 (evs1 ++ Some (EventUpd upds) :: evs2) s1 ->
       forall procs1 procs2 proc nevs1 nevs2
              (Hpe: length evs1 = length procs1),
@@ -437,7 +424,7 @@ Section Equivalence.
           EvalUGraphTrs ug1 s1 ug2 (hupds s1 upds) /\
             UGraphUnique ug2 /\
             UGraphUpdOk ug2 /\
-            UGraphProcs decls funcs mtrss ug2 procs /\
+            UGraphStd decls funcs mtrss ug2 procs /\
             UGraphEventsStOk ug2 (nevs1 ++ None :: nevs2) (hupds s1 upds).
   Proof using .
     intros.
@@ -454,11 +441,11 @@ Section Equivalence.
       rewrite !map_app; simpl; f_equal.
     - eapply UGraphUpdOk_upd; [|assumption].
       apply H7. (* [UNodeEventOk] *)
-    - apply UGraphProcs_upd; assumption.
+    - apply UGraphStd_upd; assumption.
     - apply Forall2_app.
       + eapply ExecEvent_imp_EvalUGraphTrs_upd_others_left;
           [|eassumption|eassumption|..|eassumption].
-        * (* [UNodeKeysOk] derived from [UGraphProcs] *)
+        * (* [UNodeKeysOk] derived from [UGraphStd] *)
           apply Forall2_app_inv_l in H6; dest; inv H12; apply H16.
         * apply Forall_app in H5; apply H5.
         * apply Forall_app in H3; apply H3.
@@ -474,7 +461,7 @@ Section Equivalence.
           apply Bool.orb_negb_l.
         * eapply ExecEvent_imp_EvalUGraphTrs_upd_others_left;
             [|eassumption|eassumption|..|eassumption].
-          { (* [UNodeKeysOk] derived from [UGraphProcs] *)
+          { (* [UNodeKeysOk] derived from [UGraphStd] *)
             apply Forall2_app_inv_l in H6; dest; inv H12; apply H16.
           }
           { apply Forall_app in H5; dest.
@@ -517,18 +504,18 @@ Section Equivalence.
 
   Lemma ExecEvent_imp_EvalUGraphTrs:
     forall procs s1 s2 events1 events2 nba1 nba2,
-      Forall (ProcWf decls funcs mtrss) procs ->
+      Forall (fun _ : Process => True) procs ->
       ExecEvent decls funcs mtrss procs s1 events1 nba1 s2 events2 nba2 ->
       nba1 = nilR procs -> nba2 = nilR procs ->
       forall ug1,
         UGraphUnique ug1 ->
         UGraphUpdOk ug1 ->
-        UGraphProcs decls funcs mtrss ug1 procs ->
+        UGraphStd decls funcs mtrss ug1 procs ->
         UGraphEventsStOk ug1 events1 s1 ->
         exists ug2, EvalUGraphTrs ug1 s1 ug2 s2 /\
                       UGraphUnique ug2 /\
                       UGraphUpdOk ug2 /\
-                      UGraphProcs decls funcs mtrss ug2 procs /\
+                      UGraphStd decls funcs mtrss ug2 procs /\
                       UGraphEventsStOk ug2 events2 s2.
   Proof using .
     intros; subst.
@@ -575,18 +562,18 @@ Section Equivalence.
 
   Lemma ExecEvents_imp_EvalUGraphTrs_ind:
     forall procs s1 s2 events1 events2 nba1 nba2,
-      Forall (ProcWf decls funcs mtrss) procs ->
+      Forall (fun _ : Process => True) procs ->
       ExecEvents decls funcs mtrss procs s1 events1 nba1 s2 events2 nba2 ->
       nba1 = nilR procs -> nba2 = nilR procs ->
       forall ug1,
         UGraphUnique ug1 ->
         UGraphUpdOk ug1 ->
-        UGraphProcs decls funcs mtrss ug1 procs ->
+        UGraphStd decls funcs mtrss ug1 procs ->
         UGraphEventsStOk ug1 events1 s1 ->
         exists ug2, EvalUGraphTrs ug1 s1 ug2 s2 /\
                       UGraphUnique ug2 /\
                       UGraphUpdOk ug2 /\
-                      UGraphProcs decls funcs mtrss ug2 procs /\
+                      UGraphStd decls funcs mtrss ug2 procs /\
                       UGraphEventsStOk ug2 events2 s2.
   Proof using .
     induction 2; intros; subst.
@@ -602,131 +589,34 @@ Section Equivalence.
       eapply EvalUGraphTrs_trs; eassumption.
   Qed.
 
-  Section WithProcs.
-    Variables (ips: IPS).
+  (** The graph and initial queue are fixed. Their compatibility is checked at
+   * this state, rather than assumed for all modules, inputs, and phases. *)
+  Definition UGraphOk (ug: ugraph) (procs: Processes) (events: Region) (st: State): Prop :=
+    UGraphUnique ug /\ UGraphUpdOk ug /\ UGraphStd decls funcs mtrss ug procs /\
+      UGraphEventsStOk ug events st.
 
-    Local Notation inits := (List.map fst ips).
-    Local Notation procs := (List.map snd ips).
+  Lemma graph_empty_queue_complete: forall ug procs st,
+    UGraphEventsStOk ug (nilR procs) st -> UGraphUpdCompl ug.
+  Proof.
+    intros ug procs st Hrel.
+    unfold UGraphEventsStOk in Hrel; apply Forall_forall.
+    intros un Hin; eapply Forall2_In_left in Hrel; [|exact Hin].
+    destruct Hrel as [oev [Hev [_ Hcompl]]].
+    unfold nilR in Hev; apply in_map_iff in Hev.
+    destruct Hev as [proc [Heq _]]; subst oev; exact Hcompl.
+  Qed.
 
-    Definition TrsR := ExecTimeSlot decls funcs mtrss procs.
-
-    Definition TrsStdI (s1 s2: State): Prop :=
-      TrsR s1 (initsR inits) (nilR procs) s2.
-
-    Definition ugMInits := getUGraph decls funcs mtrss false ips.
-
-    Lemma ugMInits_UpdfSub: forall s, UpdfSub ugMInits s.
-    Proof using .
-      unfold UpdfSub, ugMInits, getUGraph; intros.
-      apply Forall_forall; intro un; intros.
-      exfalso.
-      apply in_map_iff in H3.
-      destruct H3 as [[init proc] [? ?]]; simpl in *.
-      subst; simpl in *.
-      rewrite Bool.andb_false_r in H4; discriminate.
-    Qed.
-
-    (** Initial conditions: all proven statically (syntactically) by the given processes. *)
-    Hypotheses (Hprocs0: procs <> nil)
-      (Hprocs1: Forall (ProcWf decls funcs mtrss) procs)
-      (Hugu: UGraphUnique ugMInits)
-      (Hugp: UGraphProcs decls funcs mtrss ugMInits procs)
-      (Huuo: UGraphUpdOk ugMInits)
-      (Huuc: UGraphUpdComplOk)
-      (Hueo: UGraphEventsOk ugMInits (initsR inits)).
-
-    Lemma ExecEvents_imp_EvalUGraphTrs:
-      forall s1 s2,
-        ExecEvents decls funcs mtrss procs
-          s1 (initsR inits) (nilR procs)
-          s2 (nilR procs) (nilR procs) ->
-        exists ug2, EvalUGraphTrs ugMInits s1 ug2 s2 /\ UGraphUpdCompl ug2.
-    Proof using All.
-      intros.
-      eapply ExecEvents_imp_EvalUGraphTrs_ind with (ug1:= ugMInits) in H3;
-        try reflexivity; try assumption.
-      - destruct H3 as [ug2 ?]; dest.
-        exists ug2; repeat split; [assumption..|].
-        eapply Huuc; eassumption.
-      - apply Hueo.
-    Qed.
-
-    (** Nonblocking assignments are used only in clock-driven blocks.
-     * Future work: define a static analyzer for this requirement. *)
-
-    Hypothesis (Hnba: NbaFree decls funcs mtrss procs).
-
-    Theorem TrsStdI_imp_EvalUGraphTrs:
-      forall s1 s2,
-        TrsStdI s1 s2 ->
-        exists ug2, EvalUGraphTrs ugMInits s1 ug2 s2 /\ UGraphUpdCompl ug2.
-    Proof using All.
-      intros.
-      apply ExecTimeSlot_nba_nilR_inv in H3.
-      destruct H3 as [si [nbas [? ?]]].
-      pose proof H3.
-      apply Hnba in H5; [|apply initsR_no_clk; fail].
-      subst nbas.
-      apply ExecTimeSlot_nilR_inv in H4; subst si.
-      apply ExecEvents_imp_EvalUGraphTrs.
-      assumption.
-    Qed.
-
-    (** Additional conditions to ensure the other direction by confluence *)
-    Variables (s1: State) (vars: list vid_t).
-    Hypotheses (Hugk: UGraphKeysOk ugMInits)
-      (Huguf: UGraphUpdfOk ugMInits)
-      (Hstwf: UGraphStWf s1 ugMInits)
-      (Hvars: HMapStrKeysWf s1 vars)
-      (Hugcf: UGraphCycleFree ugMInits).
-
-    Theorem EvalUGraphTrs_imp_TrsStdI_equiv:
-      forall ug2 s2,
-        EvalUGraphTrs ugMInits s1 ug2 s2 ->
-        UGraphUpdCompl ug2 ->
-        forall ts2,
-          TrsStdI s1 ts2 ->
-          UpdStEquiv ug2 s2 ts2.
-    Proof using All.
-      intros.
-      apply TrsStdI_imp_EvalUGraphTrs in H5.
-      destruct H5 as [aug2 [? ?]].
-      eapply USEquiv_UpdStEquiv.
-      eapply eval_ugraph_confl with (ug0:= ugMInits) (st0:= s1) (ug2:= aug2); try assumption.
-      apply ugMInits_UpdfSub.
-    Qed.
-
-    Theorem EvalUGraphTrs_imp_TrsStdI_rel:
-      forall ug2 s2,
-        EvalUGraphTrsFp ugMInits s1 ug2 s2 ->
-        forall ts2,
-          TrsStdI s1 ts2 ->
-          s2 = ts2.
-    Proof using All.
-      intros.
-      pose proof H4 as Htrs.
-      apply TrsStdI_imp_EvalUGraphTrs in H4.
-      destruct H4 as [aug2 [? ?]].
-      eapply eval_ugraph_confl_state_eq with (ug0:= ugMInits) (st0:= s1);
-        try eassumption; [apply ugMInits_UpdfSub|].
-      repeat split; try eassumption.
-      eapply Hugcf; eassumption.
-    Qed.
-
-    Theorem EvalUGraphTrs_imp_TrsStdI:
-      forall ug2 s2,
-        EvalUGraphTrsFp ugMInits s1 ug2 s2 ->
-        ExecTimeSlotProg decls funcs mtrss procs ->
-        TrsStdI s1 s2.
-    Proof using All.
-      intros.
-      specialize (H4 s1 (initsR inits) (nilR procs)).
-      destruct H4 as [ts2 ?].
-      eapply EvalUGraphTrs_imp_TrsStdI_rel in H3; [|eassumption].
-      subst s2.
-      assumption.
-    Qed.
-
-  End WithProcs.
-
+  Theorem ExecTimeSlot_to_graph: forall procs ug st inits stf,
+    UGraphOk ug procs (initsR inits) st ->
+    ExecTimeSlot decls funcs mtrss procs st (initsR inits) (nilR procs) stf ->
+    exists ugf, EvalUGraphTrs ug st ugf stf /\ UGraphUpdCompl ugf.
+  Proof.
+    intros procs ug st inits stf [Hunique [Hupd [Hprocs Hevents]]] Hslot.
+    apply ExecTimeSlot_inits_events in Hslot.
+    eapply ExecEvents_imp_EvalUGraphTrs_ind in Hslot; try reflexivity; try eassumption.
+    - destruct Hslot as [ugf [Hrun [_ [_ [_ Hfinal]]]]].
+      exists ugf; split; [exact Hrun|].
+      eapply graph_empty_queue_complete; exact Hfinal.
+    - apply Forall_forall; intros; exact I.
+  Qed.
 End Equivalence.

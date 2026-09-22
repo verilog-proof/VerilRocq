@@ -3,7 +3,7 @@ Require Import Coq.ZArith.BinInt.
 Require Import Lib.Lib. Import HMapNotations. Import SZNotations.
 Require Import Lang.Syntax Lang.Analysis Lang.Semantics. Include SFMonadNotations.
 
-Require Import UpdGraph Standard TrsProc StfUpdGraph StdUpdGraph ProcUpdGraph.
+Require Import Standard TrsProc ProcUpdGraph.
 
 Set Implicit Arguments.
 
@@ -17,7 +17,7 @@ Section StfStd.
   Context `{vid_ops}.
   Context `{array_ops hmap}.
 
-  Variables (decls: Decls) (funcs: Funcs) (mtrss: MTrss) (vars: list vid_t)
+  Variables (decls: Decls) (funcs: Funcs) (mtrss: MTrss)
     (mprocs: Processes). (* Processes from the given module. *)
 
   Definition procs: Processes := getProcInputClk :: mprocs.
@@ -40,8 +40,12 @@ Section StfStd.
   Definition ipsAll (inputs: InitState) (flops: list InitState): IPS :=
     (inputs, getProcInputClk) :: (combineIps flops mprocs).
 
+  (** Compare flop bindings observationally: an execution can return
+   * [HMapEmpty], whereas aggregating an empty list produces [HMapStr nil]. *)
   Definition TrsF (ins: InitState) (flops nflops: list InitState): Prop :=
-    exists stf, TrsProcsRep decls funcs mtrss procs (initState (ipsAll ins flops)) stf (initState (ipsFlops nflops)).
+    exists stf computed,
+      TrsProcsRep decls funcs mtrss procs (initState (ipsAll ins flops)) stf computed /\
+      HSEquiv computed (initState (ipsFlops nflops)).
 
   Definition StateOf (ins: InitState) (flops: list InitState) (stf: State): Prop :=
     exists nflops, TrsProcsRep decls funcs mtrss procs (initState (ipsAll ins flops)) stf nflops.
@@ -51,39 +55,6 @@ Section StfStd.
 
   Definition TrsC (st0 st1: State) (flops: list InitState): Prop :=
     ExecTimeSlot decls funcs mtrss procs st0 (flopsR flops) (nilR procs) st1.
-
-  Definition IpsInputsMono :=
-    forall ins0 flops ug0 st0,
-      EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins0 flops)) [] ug0 st0 ->
-      forall ins1 st1,
-        (exists ug1, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins1 flops)) [] ug1 st1) <->
-          (exists ugi, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsIns ins1)) st0 ugi st1).
-
-  Definition IpsFlopsMono :=
-    forall ins flops0 ug0 st0,
-      EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins flops0)) [] ug0 st0 ->
-      forall flops1 st1,
-        (exists ug1, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins flops1)) [] ug1 st1) <->
-          (exists ugi, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsFlops flops1)) st0 ugi st1).
-
-  Definition IpsTrsVars :=
-    forall ins flops st ugf stf,
-      EvalUGraphTrs (getUGraph decls funcs mtrss false (ipsAll ins flops)) st ugf stf ->
-      forall stu,
-        HMapStrKeysWf (hupds stf stu) vars.
-
-  Definition IpsGetUGraphWf :=
-    forall ins flops,
-      HMapStrEmptyWf (initState (ipsAll ins flops)) /\
-      GetUGraphWf decls funcs mtrss (ipsAll ins flops).
-
-  Definition TrsCFlopsConst: Prop :=
-    forall ins flops0 stf0,
-      StateOf ins flops0 stf0 ->
-      forall stf1 flops1,
-        TrsC stf0 stf1 flops1 ->
-        StateOf ins flops1 stf1 ->
-        TrsF ins flops0 flops1.
 
   Lemma std_ipsIns_procs:
     forall ins, List.map snd (ipsIns ins) = procs.
@@ -121,434 +92,139 @@ Section StfStd.
       + congruence.
   Qed.
 
-  Hypotheses (HstdOk: StdOk decls funcs mtrss procs)
-    (HprocsOk: ProcsOk decls funcs mtrss procs)
-    (HugOk: UGraphOk decls funcs mtrss).
+  (** A certificate concerns one injection from one initial state. Its invariant
+   * is preserved by individual active events and identifies a source fixed
+   * point when the queue empties. Termination is required only for this slot.
+   * No condition is imposed on unrelated states, queues, or update graphs. *)
+  Definition InjectionReady (st0: State) (inits: list InitState)
+    (ins: InitState) (flops: list InitState): Prop :=
+    (exists Inv: State -> Region -> Prop,
+      Inv st0 (initsR inits) /\
+      (forall s act s' act',
+        Inv s act ->
+        ExecEvent decls funcs mtrss procs s act (nilR procs)
+          s' act' (nilR procs) ->
+        Inv s' act') /\
+      (forall s, Inv s (nilR procs) -> StateOf ins flops s)) /\
+    (exists s, ExecTimeSlot decls funcs mtrss procs st0
+      (initsR inits) (nilR procs) s).
 
-  Hypotheses (HugIMono: IpsInputsMono) (HugFMono: IpsFlopsMono)
-    (HugVars: IpsTrsVars) (HugWf: IpsGetUGraphWf)
-    (HflopsC: TrsCFlopsConst).
-
-  Section TrsIEquiv.
-    Variable flops: list InitState.
-    Hypotheses (Hflops: List.length flops = List.length mprocs).
-
-    Lemma stf_implies_TrsI:
-      forall ins0 stf0,
-        StateOf ins0 flops stf0 ->
-        forall ins1 stf1,
-          StateOf ins1 flops stf1 ->
-          TrsI stf0 stf1 ins1.
-    Proof using All.
-      unfold StateOf; intros.
-      destruct H3 as [nflops0 ?].
-      destruct H4 as [nflops1 ?].
-
-      (** Apply TrsF-to-UGraph *)
-      replace procs with (List.map snd (ipsAll ins1 flops)) in H4
-          by apply std_ipsAll_procs.
-      simple apply TrsProcsRep_imp_EvalUGraphTrs with (stb:= HMapEmpty) in H4.
-      all: try (apply HugOk; fail).
-      all: try (rewrite std_ipsAll_procs by assumption; apply HprocsOk; fail).
-      3: apply HugWf; fail.
-      2: (replace (initState (ipsAll ins1 flops)) with (hupds [] (initState (ipsAll ins1 flops))) by reflexivity;
-          apply HugOk).
-      destruct H4 as [ug1 [? [? ?]]].
-      apply HugWf in H4.
-      replace (hupds [] stf1) with stf1 in H4 by reflexivity.
-
-      replace procs with (List.map snd (ipsAll ins0 flops)) in H3
-          by apply std_ipsAll_procs.
-      simple apply TrsProcsRep_imp_EvalUGraphTrs with (stb:= HMapEmpty) in H3.
-      all: try (apply HugOk; fail).
-      all: try (rewrite std_ipsAll_procs by assumption; apply HprocsOk; fail).
-      3: apply HugWf; fail.
-      2: (replace (initState (ipsAll ins0 flops)) with (hupds [] (initState (ipsAll ins0 flops))) by reflexivity;
-          apply HugOk).
-      destruct H3 as [ug0 [? [? ?]]].
-      apply HugWf in H3.
-      replace (hupds [] stf0) with stf0 in H3 by reflexivity.
-
-      (** Fill the updates gap between [ins1] and [ins1 U flops] *)
-      assert (EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins0 flops)) [] ug0 stf0)
-        as Hugi by (repeat split; assumption).
-      apply HugIMono in Hugi.
-      assert (exists ug1, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins1 flops)) [] ug1 stf1)
-        as Hmono by (eexists; repeat split; eassumption).
-      specialize (Hugi ins1 stf1).
-      destruct Hugi as [Hugi _].
-      specialize (Hugi Hmono); clear Hmono.
-      destruct Hugi as [ugi Hugi].
-
-      (** Apply UGraph-to-TrsI *)
-      unfold TrsI.
-      replace (inputsR procs ins1) with (initsR (List.map fst (ipsIns ins1))).
-      2: { unfold inputsR; simpl.
-           f_equal.
-           clear; induction mprocs; [reflexivity|simpl; congruence]. }
-      replace procs with (List.map snd (ipsIns ins1)).
-      2: { simpl; unfold procs.
-           f_equal.
-           clear; induction mprocs; [reflexivity|simpl; congruence]. }
-      eapply EvalUGraphTrs_imp_TrsStdI with (ug2:= ugi).
-
-      all: try (apply HugOk; fail).
-      - discriminate.
-      - rewrite std_ipsIns_procs; apply HprocsOk.
-      - rewrite std_ipsIns_procs; apply HstdOk.
-      - replace stf0 with (hupds stf0 []) by apply hupds_empty.
-        eapply HugOk; [eassumption|].
-        rewrite std_ipsAll_procs, std_ipsIns_procs.
-        reflexivity.
-      - replace stf0 with (hupds stf0 []) by apply hupds_empty.
-        eapply HugVars; eassumption.
-      - assumption.
-      - rewrite std_ipsIns_procs; apply HstdOk.
-    Qed.
-
-    Lemma TrsI_implies_stf:
-      forall ins0 stf0,
-        StateOf ins0 flops stf0 ->
-        forall ins1 stf1,
-          TrsI stf0 stf1 ins1 ->
-          StateOf ins1 flops stf1.
-    Proof using All.
-      unfold StateOf; intros.
-      destruct H3 as [nflops ?].
-      pose proof H3 as Hbase.
-      apply HprocsOk in Hbase.
-
-      (** Apply TrsI-to-UGraph *)
-      unfold TrsI in H4.
-      replace (inputsR procs ins1) with (initsR (List.map fst (ipsIns ins1))) in H4.
-      2: { unfold inputsR; simpl.
-           f_equal.
-           clear; induction mprocs; [reflexivity|simpl; congruence]. }
-      replace procs with (List.map snd (ipsIns ins1)) in H4.
-      2: { simpl; unfold procs.
-           f_equal.
-           clear; induction mprocs; [reflexivity|simpl; congruence]. }
-      apply TrsStdI_imp_EvalUGraphTrs in H4.
-      all: try (apply HugOk; fail).
-      all: try rewrite !std_ipsIns_procs; try assumption.
-      2: discriminate.
-      destruct H4 as [ug1 [? ?]].
-
-      (** Apply TrsF-to-UGraph *)
-      replace procs with (List.map snd (ipsAll ins0 flops)) in H3
-          by apply std_ipsAll_procs.
-      simple apply TrsProcsRep_imp_EvalUGraphTrs with (stb:= HMapEmpty) in H3.
-      all: try (apply HugOk; fail).
-      all: try (rewrite std_ipsAll_procs by assumption; apply HprocsOk; fail).
-      3: apply HugWf.
-      destruct H3 as [ug0 [? [? ?]]].
-      apply HugWf in H3.
-      replace (hupds [] stf0) with stf0 in H3 by reflexivity.
-
-      (** Fill the updates gap between [ins1] and [ins1 U flops] *)
-      assert (EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins0 flops)) [] ug0 stf0)
-        as Hugi by (repeat split; assumption).
-      apply HugIMono in Hugi.
-      assert (exists ugi, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsIns ins1)) stf0 ugi stf1)
-        as Hmono by (eexists; repeat split; try eassumption;
-                     eapply HugOk; eassumption).
-      specialize (Hugi ins1 stf1).
-      destruct Hugi as [_ Hugi].
-      specialize (Hugi Hmono); clear Hmono.
-      destruct Hugi as [ugi Hugi].
-      assert (EvalUGraphTrsFp (getUGraph decls funcs mtrss true (ipsAll ins1 flops))
-                (initState (ipsAll ins1 flops)) ugi stf1) as Hugif.
-      { destruct Hugi as [? [? ?]].
-        repeat split; try assumption.
-        apply HugWf in H8; assumption.
-      }
-      clear Hugi.
-
-      (** Apply UGraph-to-TrsF *)
-      replace procs with (List.map snd (ipsAll ins1 flops))
-        by apply std_ipsAll_procs.
-      eapply EvalUGraphTrs_imp_TrsProcsRep with (stb:= stf0) (ug2:= ugi) in Hugif.
-      all: try (apply HugOk; fail).
-      all: try rewrite !std_ipsAll_procs in *; try apply HprocsOk; try assumption.
-      - destruct Hugif as [tstf [tflops [? ?]]].
-        specialize (Hbase _ _ _ H8).
-        rewrite Hbase in H9; subst tstf.
-        eexists; eassumption.
-      - replace (initState (ipsAll ins1 flops)) with (hupds [] (initState (ipsAll ins1 flops))) by reflexivity.
-        apply HugOk.
-      - apply HugWf.
-      - eapply HugOk; [eassumption|].
-        rewrite !std_ipsAll_procs.
-        reflexivity.
-      - eapply HugVars; eassumption.
-      - eapply HugOk; eassumption.
-      - replace (initState (ipsAll ins0 flops)) with (hupds [] (initState (ipsAll ins0 flops))) by reflexivity.
-        apply HugOk.
-      - apply HstdOk.
-    Qed.
-
-  End TrsIEquiv.
-
-  Section TrsCEquiv.
-    Variables (ins: InitState)
-      (flops0 flops1: list InitState).
-    Hypotheses
-      (Hflops0: List.length flops0 = List.length mprocs)
-      (Hflops1: List.length flops1 = List.length mprocs).
-
-    Lemma stf_implies_TrsC:
-      forall stf0,
-        StateOf ins flops0 stf0 ->
-        forall stf1,
-          StateOf ins flops1 stf1 ->
-          TrsF ins flops0 flops1 ->
-          TrsC stf0 stf1 flops1.
-    Proof using All.
-      unfold StateOf, TrsF; intros.
-      destruct H3 as [nflops0 ?].
-      destruct H4 as [nflops1 ?].
-      destruct H5 as [fstf0 ?].
-      pose proof (TrsProcsRep_det H3 H5).
-      destruct H6; subst fstf0 nflops0.
-      clear H5.
-
-      (** Apply TrsF-to-UGraph *)
-      replace procs with (List.map snd (ipsAll ins flops1)) in H4
-          by apply std_ipsAll_procs.
-      simple apply TrsProcsRep_imp_EvalUGraphTrs with (stb:= HMapEmpty) in H4.
-      all: try (apply HugOk; fail).
-      all: try (rewrite std_ipsAll_procs by assumption; apply HprocsOk; fail).
-      3: apply HugWf.
-      2: (replace (initState (ipsAll ins flops1)) with (hupds [] (initState (ipsAll ins flops1))) by reflexivity;
-          apply HugOk).
-      destruct H4 as [ug1 [? [? ?]]].
-      apply HugWf in H4.
-      replace (hupds [] stf1) with stf1 in H4 by reflexivity.
-
-      replace procs with (List.map snd (ipsAll ins flops0)) in H3
-          by apply std_ipsAll_procs.
-      simple apply TrsProcsRep_imp_EvalUGraphTrs with (stb:= HMapEmpty) in H3.
-      all: try (apply HugOk; fail).
-      all: try (rewrite std_ipsAll_procs by assumption; apply HprocsOk; fail).
-      3: apply HugWf.
-      2: (replace (initState (ipsAll ins flops0)) with (hupds [] (initState (ipsAll ins flops0))) by reflexivity;
-          apply HugOk).
-      destruct H3 as [ug0 [? [? ?]]].
-      apply HugWf in H3.
-      replace (hupds [] stf0) with stf0 in H3 by reflexivity.
-
-      (** Fill the updates gap between [flops1] and [ins U flops1] *)
-      assert (EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins flops0)) [] ug0 stf0)
-        as Hugi by (repeat split; assumption).
-      apply HugFMono in Hugi.
-      assert (exists ug1, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins flops1)) [] ug1 stf1)
-        as Hmono by (eexists; repeat split; eassumption).
-      specialize (Hugi flops1 stf1).
-      destruct Hugi as [Hugi _].
-      specialize (Hugi Hmono); clear Hmono.
-      destruct Hugi as [ugi Hugi].
-
-      (** Apply UGraph-to-TrsC *)
-      unfold TrsC.
-      replace (flopsR flops1) with (initsR (List.map fst (ipsFlops flops1))).
-      2: { unfold flopsR; simpl.
-           f_equal.
-           clear -Hflops1.
-           generalize dependent mprocs; clear.
-           induction flops1; intros.
-           { destruct mprocs; [reflexivity|discriminate]. }
-           { destruct mprocs; [discriminate|].
-             simpl in Hflops1; inv Hflops1.
-             simpl; rewrite IHl by assumption.
-             reflexivity.
-           }
-      }
-      replace procs with (List.map snd (ipsFlops flops1)).
-      2: { simpl; unfold procs.
-           f_equal.
-           clear -Hflops1.
-           generalize dependent flops1; clear.
-           induction mprocs; intros.
-           { destruct flops1; [reflexivity|discriminate]. }
-           { destruct flops1; [discriminate|].
-             simpl in Hflops1; inv Hflops1.
-             simpl; rewrite IHp by assumption.
-             reflexivity.
-           }
-      }
-      eapply EvalUGraphTrs_imp_TrsStdI with (ug2:= ugi).
-
-      all: try (apply HugOk; fail).
-      - discriminate.
-      - rewrite std_ipsFlops_procs; apply HprocsOk.
-      - rewrite std_ipsFlops_procs; apply HstdOk.
-      - replace stf0 with (hupds stf0 []) by apply hupds_empty.
-        eapply HugOk; [eassumption|].
-        rewrite std_ipsAll_procs, std_ipsFlops_procs.
-        reflexivity.
-      - replace stf0 with (hupds stf0 []) by apply hupds_empty.
-        eapply HugVars; eassumption.
-      - assumption.
-      - rewrite std_ipsFlops_procs by assumption; apply HstdOk.
-    Qed.
-
-    Lemma TrsC_implies_stf:
-      forall stf0,
-        StateOf ins flops0 stf0 ->
-        forall stf1,
-          TrsC stf0 stf1 flops1 ->
-          StateOf ins flops1 stf1.
-    Proof using All.
-      unfold StateOf; intros.
-      destruct H3 as [nflops ?].
-      pose proof H3 as Hbase.
-      apply HprocsOk in Hbase.
-
-      (** Apply TrsI-to-UGraph *)
-      unfold TrsC in H4.
-      replace (flopsR flops1) with (initsR (List.map fst (ipsFlops flops1))) in H4.
-      2: { unfold flopsR; simpl.
-           f_equal.
-           clear -Hflops1.
-           generalize dependent mprocs; clear.
-           induction flops1; intros.
-           { destruct mprocs; [reflexivity|discriminate]. }
-           { destruct mprocs; [discriminate|].
-             simpl in Hflops1; inv Hflops1.
-             simpl; rewrite IHl by assumption.
-             reflexivity.
-           }
-      }
-      replace procs with (List.map snd (ipsFlops flops1)) in H4.
-      2: { simpl; unfold procs.
-           f_equal.
-           clear -Hflops1.
-           generalize dependent flops1; clear.
-           induction mprocs; intros.
-           { destruct flops1; [reflexivity|discriminate]. }
-           { destruct flops1; [discriminate|].
-             simpl in Hflops1; inv Hflops1.
-             simpl; rewrite IHp by assumption.
-             reflexivity.
-           }
-      }
-      apply TrsStdI_imp_EvalUGraphTrs in H4.
-      all: try (apply HugOk; fail).
-      all: try rewrite !std_ipsFlops_procs; try assumption.
-      2: discriminate.
-      destruct H4 as [ug1 [? ?]].
-
-      (** Apply TrsF-to-UGraph *)
-      replace procs with (List.map snd (ipsAll ins flops0)) in H3
-          by apply std_ipsAll_procs.
-      simple apply TrsProcsRep_imp_EvalUGraphTrs with (stb:= HMapEmpty) in H3.
-      all: try (apply HugOk; fail).
-      all: try (rewrite std_ipsAll_procs by assumption; apply HprocsOk; fail).
-      3: apply HugWf.
-      destruct H3 as [ug0 [? [? ?]]].
-      apply HugWf in H3.
-      replace (hupds [] stf0) with stf0 in H3 by reflexivity.
-
-      (** Fill the updates gap between [flops1] and [ins U flops1] *)
-      assert (EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsAll ins flops0)) [] ug0 stf0)
-        as Hugi by (repeat split; assumption).
-      apply HugFMono in Hugi.
-      assert (exists ugi, EvalUGraphTrsFp (getUGraph decls funcs mtrss false (ipsFlops flops1)) stf0 ugi stf1)
-        as Hmono by (eexists; repeat split; try eassumption;
-                     eapply HugOk; eassumption).
-      specialize (Hugi flops1 stf1).
-      destruct Hugi as [_ Hugi].
-      specialize (Hugi Hmono); clear Hmono.
-      destruct Hugi as [ugi Hugi].
-      assert (EvalUGraphTrsFp (getUGraph decls funcs mtrss true (ipsAll ins flops1))
-                (initState (ipsAll ins flops1)) ugi stf1) as Hugif.
-      { destruct Hugi as [? [? ?]].
-        repeat split; try assumption.
-        apply HugWf in H8; assumption.
-      }
-      clear Hugi.
-
-      (** Apply UGraph-to-TrsF *)
-      replace procs with (List.map snd (ipsAll ins flops1))
-        by apply std_ipsAll_procs.
-      eapply EvalUGraphTrs_imp_TrsProcsRep with (stb:= stf0) (ug2:= ugi) in Hugif.
-      all: try (apply HugOk; fail).
-      all: try rewrite !std_ipsAll_procs in *; try apply HprocsOk; try assumption.
-      - destruct Hugif as [tstf [tflops [? ?]]].
-        specialize (Hbase _ _ _ H8).
-        rewrite Hbase in H9; subst tstf.
-        eexists; eassumption.
-      - replace (initState (ipsAll ins flops1)) with (hupds [] (initState (ipsAll ins flops1))) by reflexivity.
-        apply HugOk.
-      - apply HugWf.
-      - eapply HugOk; [eassumption|].
-        rewrite !std_ipsAll_procs.
-        reflexivity.
-      - eapply HugVars; eassumption.
-      - eapply HugOk; eassumption.
-      - replace (initState (ipsAll ins flops0)) with (hupds [] (initState (ipsAll ins flops0))) by reflexivity.
-        apply HugOk.
-      - apply HstdOk.
-    Qed.
-
-  End TrsCEquiv.
-
-  Variables (ins0 ins1: InitState)
-    (flops0 flops1: list InitState).
-  Hypotheses
-    (Hflops0: List.length flops0 = List.length mprocs)
-    (Hflops1: List.length flops1 = List.length mprocs).
-
-  Theorem stf_implies_std:
-    forall stf00,
-      StateOf ins0 flops0 stf00 ->
-      forall stf11,
-        StateOf ins1 flops1 stf11 ->
-        TrsF ins1 flops0 flops1 ->
-        exists stf10, TrsI stf00 stf10 ins1 /\ TrsC stf10 stf11 flops1.
-  Proof using All.
-    intros.
-    pose proof H5 as Hf.
-    red in Hf; destruct Hf as [stf10 Hf].
-    assert (StateOf ins1 flops0 stf10) as Hs by (eexists; eassumption).
-    pose proof Hs as Hs2.
-    apply stf_implies_TrsI
-      with (ins0:= ins0) (stf0:= stf00) in Hs; [|assumption..].
-    apply stf_implies_TrsC
-      with (flops0:= flops0) (stf0:= stf10) in H4; [|eassumption..].
-    eexists; split; eassumption.
+  Lemma StateOf_det: forall ins flops s1 s2,
+    StateOf ins flops s1 -> StateOf ins flops s2 -> s1 = s2.
+  Proof.
+    intros ins flops s1 s2 [nf1 Hrun1] [nf2 Hrun2].
+    exact (proj1 (TrsProcsRep_det Hrun1 Hrun2)).
   Qed.
 
-  Theorem std_implies_stf:
-    forall stf00,
-      StateOf ins0 flops0 stf00 ->
-      forall stf10,
-        TrsI stf00 stf10 ins1 ->
-        forall stf11,
-          TrsC stf10 stf11 flops1 ->
-          (StateOf ins1 flops1 stf11 /\ TrsF ins1 flops0 flops1).
-  Proof using All.
-    intros.
-    assert (StateOf ins1 flops0 stf10) as Hst0.
-    { eapply TrsI_implies_stf in H4; [..|eassumption]; eassumption. }
-    assert (StateOf ins1 flops1 stf11) as Hst1.
-    { eapply TrsC_implies_stf in H5; [..|eassumption]; eassumption. }
-    split; [assumption|].
-    eapply HflopsC; eassumption.
+  Lemma injection_ready_empty: forall st0 inits ins flops,
+    initsR inits = nilR procs -> StateOf ins flops st0 ->
+    InjectionReady st0 inits ins flops.
+  Proof.
+    intros st0 inits ins flops Hempty Hstate; split.
+    - exists (fun s act => s = st0 /\ act = nilR procs).
+      split; [split; [reflexivity|exact Hempty]|].
+      split.
+      + intros s act s' act' [_ Heq] Hstep; subst act.
+        exfalso; eapply ExecEvent_nilR_false; eassumption.
+      + intros s [Heq _]; subst s; exact Hstate.
+    - exists st0; rewrite Hempty; constructor.
   Qed.
 
-  Theorem stf_std_equiv:
-    forall stf00,
-      StateOf ins0 flops0 stf00 ->
-      forall stf11,
-        (StateOf ins1 flops1 stf11 /\ TrsF ins1 flops0 flops1) <->
-        (exists stf10, TrsI stf00 stf10 ins1 /\ TrsC stf10 stf11 flops1).
-  Proof using All.
-    intros; split; intros.
-    - destruct H4.
-      apply stf_implies_std; assumption.
-    - destruct H4 as [stf10 [? ?]].
-      eapply std_implies_stf; eassumption.
+  Lemma injection_equiv: forall st0 inits ins flops,
+    InjectionReady st0 inits ins flops ->
+    forall stf,
+      StateOf ins flops stf <->
+      ExecTimeSlot decls funcs mtrss procs st0
+        (initsR inits) (nilR procs) stf.
+  Proof.
+    intros st0 inits ins flops [[Inv [Hinit [Hstep Hdone]]] Hprogress].
+    assert (Hsound: forall stf,
+      ExecTimeSlot decls funcs mtrss procs st0
+        (initsR inits) (nilR procs) stf -> StateOf ins flops stf).
+    { intros stf Hslot. apply Hdone.
+      eapply ExecTimeSlot_inits_invariant; eassumption. }
+    intros stf; split.
+    - intros Hsource. destruct Hprogress as [s Hslot].
+      pose proof (StateOf_det Hsource (Hsound _ Hslot)) as Heq.
+      subst s; exact Hslot.
+    - apply Hsound.
   Qed.
 
+  Section InjectionEquiv.
+    Variables (ins0 ins1: InitState) (flops0 flops1: list InitState).
+
+    (** These are event-invariant and termination obligations for the two
+     * concrete injections. They must be established for the module and input
+     * domain in use; they do not assert a whole-program equivalence. *)
+    Hypothesis Hinputs: forall st0,
+      StateOf ins0 flops0 st0 ->
+      InjectionReady st0 (ins1 :: List.map (fun _ => nil) mprocs) ins1 flops0.
+    Hypothesis Hflops: forall st1,
+      StateOf ins1 flops0 st1 ->
+      InjectionReady st1 (nil :: flops1) ins1 flops1.
+
+    Lemma TrsI_equiv: forall st0,
+      StateOf ins0 flops0 st0 -> forall st1,
+      StateOf ins1 flops0 st1 <-> TrsI st0 st1 ins1.
+    Proof.
+      intros st0 Hstate st1.
+      exact (injection_equiv (Hinputs Hstate) st1).
+    Qed.
+
+    Lemma TrsC_equiv: forall st0,
+      StateOf ins1 flops0 st0 -> forall st1,
+      StateOf ins1 flops1 st1 <-> TrsC st0 st1 flops1.
+    Proof.
+      intros st0 Hstate st1.
+      exact (injection_equiv (Hflops Hstate) st1).
+    Qed.
+
+    Theorem stf_implies_std: forall stf00,
+      StateOf ins0 flops0 stf00 -> forall stf11,
+      StateOf ins1 flops1 stf11 ->
+      exists stf10, TrsI stf00 stf10 ins1 /\ TrsC stf10 stf11 flops1.
+    Proof.
+      intros stf00 Hstart stf11 Hfinish.
+      destruct (Hinputs Hstart) as [_ [stf10 Hslot]].
+      assert (Hmid: StateOf ins1 flops0 stf10).
+      { apply (proj2 (TrsI_equiv Hstart stf10)); exact Hslot. }
+      exists stf10; split; [exact Hslot|].
+      apply (proj1 (TrsC_equiv Hmid stf11)); exact Hfinish.
+    Qed.
+
+    Theorem std_implies_stf: forall stf00,
+      StateOf ins0 flops0 stf00 -> forall stf10,
+      TrsI stf00 stf10 ins1 -> forall stf11,
+      TrsC stf10 stf11 flops1 -> StateOf ins1 flops1 stf11.
+    Proof.
+      intros stf00 Hstart stf10 Hi stf11 Hc.
+      pose proof (proj2 (TrsI_equiv Hstart stf10) Hi) as Hmid.
+      exact (proj2 (TrsC_equiv Hmid stf11) Hc).
+    Qed.
+
+    (** [TrsC] injects the supplied flop values; it does not execute [clkR].
+     * Consequently this theorem equates stabilization results and makes no
+     * claim that the injected values were computed by [TrsF]. *)
+    Theorem stf_std_equiv: forall stf00,
+      StateOf ins0 flops0 stf00 -> forall stf11,
+      StateOf ins1 flops1 stf11 <->
+      (exists stf10, TrsI stf00 stf10 ins1 /\ TrsC stf10 stf11 flops1).
+    Proof.
+      intros stf00 Hstart stf11; split.
+      - apply stf_implies_std; exact Hstart.
+      - intros [stf10 [Hi Hc]]. eapply std_implies_stf; eassumption.
+    Qed.
+
+    (** A computed-next-flop claim is available when the injected values have
+     * separately been justified by a source transition. *)
+    Corollary stf_std_equiv_computed:
+      TrsF ins1 flops0 flops1 -> forall stf00,
+      StateOf ins0 flops0 stf00 -> forall stf11,
+      (StateOf ins1 flops1 stf11 /\ TrsF ins1 flops0 flops1) <->
+      (exists stf10, TrsI stf00 stf10 ins1 /\ TrsC stf10 stf11 flops1).
+    Proof.
+      intros Hcomputed stf00 Hstart stf11.
+      pose proof (stf_std_equiv Hstart stf11). tauto.
+    Qed.
+  End InjectionEquiv.
 End StfStd.

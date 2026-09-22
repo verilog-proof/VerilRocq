@@ -36,30 +36,125 @@ Section ProcUpdGraph.
     | _ => true
     end.
 
-  Definition getUNode (initUpd: bool) (init: InitState) (proc: Process): unode :=
-    {| keys := getWritesEvalUnit (List.map fst init) (proc_pos proc) (proc_evu proc);
-      deps := if isInit init then nil else trig_stv (proc_trig proc);
-      updOnce := isInit init && initUpd;
-      updDone := isInit init && initUpd;
-      updf := fun st => if isInit init
-                        then HMapStr init
-                        else match trsProc decls funcs mtrss proc st with
-                             | Sret u => fst u
-                             | Fail _ => []
-                             end |}.
-
   Definition IPS := list (InitState * Process).
 
-  Definition getUGraph (initUpd: bool) (ips: IPS): ugraph :=
-    List.map (fun ip => getUNode initUpd (fst ip) (snd ip)) ips.
+  (** [Inject] supplies new boundary values; [Hold] retains existing ones.
+   * [Compute] evaluates a process. Its [valid] flag records whether the stored
+   * values agree with its current dependencies. Old values may still be
+   * present when [valid = false]. *)
+  Inductive NodeRole :=
+  | Inject (bindings: InitState)
+  | Hold (bindings: InitState)
+  | Compute (writes: list vid_t) (valid: bool).
+
+  Definition getUNode (role: NodeRole) (proc: Process): unode :=
+    match role with
+    | Inject bindings =>
+        {| keys := List.map fst bindings; deps := nil;
+           updOnce := negb (isInit bindings); updDone := negb (isInit bindings);
+           updf := fun _ => HMapStr bindings |}
+    | Hold bindings =>
+        {| keys := List.map fst bindings; deps := nil;
+           updOnce := true; updDone := true;
+           updf := fun _ => HMapStr bindings |}
+    | Compute writes valid =>
+        {| keys := writes; deps := trig_stv (proc_trig proc);
+           updOnce := valid; updDone := valid;
+           updf := fun st => match trsProc decls funcs mtrss proc st with
+                            | Sret u => fst u
+                            | Fail _ => HMapEmpty
+                            end |}
+    end.
+
+  Definition roleEvent (role: NodeRole): option Event :=
+    match role with
+    | Inject (binding :: bindings) => Some (EventUpd (HMapStr (binding :: bindings)))
+    | _ => None
+    end.
+
+  Definition RoleSlots := list (NodeRole * Process).
+  Definition getUGraph (slots: RoleSlots): ugraph :=
+    List.map (fun slot => getUNode (fst slot) (snd slot)) slots.
+  Definition roleEvents (slots: RoleSlots): Region :=
+    List.map (fun slot => roleEvent (fst slot)) slots.
+
+  (** A process triggered by an update computes this node's update function.
+   * Boundary nodes have empty sensitivity lists and constant update functions. *)
+  Definition UNodeStd (un: unode) (proc: Process): Prop :=
+    UNodeKeysOk un /\
+      (forall upd, HMapStrEmpty upd -> genEvalEvent (EventUpd upd) proc = None ->
+         forall st, updf un (hupds st upd) = updf un st) /\
+      deps un = trig_stv (proc_trig proc) /\
+      (forall upd ev, genEvalEvent (EventUpd upd) proc = Some ev ->
+         forall st, updf un st = match trsProc decls funcs mtrss proc st with
+                                | Sret u => fst u | Fail _ => HMapEmpty end).
+
+  Definition UGraphStd (ug: ugraph) (procs: Processes): Prop :=
+    Forall2 UNodeStd ug procs.
+
+  Lemma UGraphStd_upd: forall ug1 un ug2 procs,
+    UGraphStd (ug1 ++ un :: ug2) procs -> forall once done_,
+    UGraphStd (ug1 ++ {| keys := keys un; deps := deps un;
+      updOnce := once; updDone := done_; updf := updf un |} :: ug2) procs.
+  Proof.
+    intros ug1 un ug2 procs Hrel once done_.
+    apply Forall2_app_inv_l in Hrel.
+    destruct Hrel as [ps1 [ps2 [Hleft [Hright Heq]]]]; subst procs.
+    inversion Hright; subst.
+    apply Forall2_app; [exact Hleft|].
+    constructor; assumption.
+  Qed.
+
+  Lemma boundary_role_std: forall bindings proc,
+    trig_stv (proc_trig proc) = nil ->
+    UNodeStd (getUNode (Inject bindings) proc) proc /\
+    UNodeStd (getUNode (Hold bindings) proc) proc.
+  Proof.
+    intros bindings proc Htrig.
+    assert (Hnone: forall upd, genEvalEvent (EventUpd upd) proc = None).
+    { intros upd; unfold genEvalEvent; rewrite Htrig; reflexivity. }
+    assert (Hconst: forall once done_, UNodeStd
+      {| keys := List.map fst bindings; deps := nil;
+         updOnce := once; updDone := done_; updf := fun _ => HMapStr bindings |} proc).
+    { intros once done_; unfold UNodeStd; split.
+      - intros st; right; exists bindings; split; reflexivity.
+      - split; [intros; reflexivity|].
+        split; [symmetry; exact Htrig|].
+        intros upd ev Hgen; rewrite Hnone in Hgen; discriminate. }
+    split; apply Hconst.
+  Qed.
+
+  Lemma hfind_hupds_absent: forall upd,
+    HMapStrEmpty upd -> forall key,
+    hfind [HEltVid key] upd = None -> forall st,
+    hfind [HEltVid key] (hupds st upd) = hfind [HEltVid key] st.
+  Proof.
+    intros upd Hmap key Hnone st; destruct upd; try contradiction.
+    - rewrite hupds_empty; reflexivity.
+    - assert (Hout: ~ In key (List.map fst str)).
+      { intros Hin; apply haccessV_Some in Hin; simpl in Hnone.
+        destruct (haccessV str key); [discriminate|contradiction]. }
+      destruct st; simpl; try reflexivity; try exact Hnone.
+      rewrite <-haccessV_hbinUStr_no_effect by exact Hout; reflexivity.
+  Qed.
+
+  Lemma compute_role_std: forall writes valid proc,
+    UNodeKeysOk (getUNode (Compute writes valid) proc) ->
+    UNodeUpdfConst (getUNode (Compute writes valid) proc) ->
+    UNodeStd (getUNode (Compute writes valid) proc) proc.
+  Proof.
+    intros writes valid proc Hkeys Hconst; split; [exact Hkeys|].
+    split.
+    - intros upd Hmap Hnone st; apply Hconst.
+      intros key Hin; apply genEvalEvent_None in Hnone.
+      eapply Forall_In in Hnone; [|exact Hin].
+      destruct (hfind [HEltVid key] upd) eqn:Hfind; [contradiction|].
+      apply hfind_hupds_absent; assumption.
+    - split; [reflexivity|intros; reflexivity].
+  Qed.
 
   Definition initState (ips: IPS): IFW :=
     HMapStr (List.concat (List.map fst ips)).
-
-  Definition GetUGraphWf (ips: IPS) :=
-    forall tst ugf stf,
-      EvalUGraphTrs (getUGraph true ips) (hupds tst (initState ips)) ugf stf <->
-        EvalUGraphTrs (getUGraph false ips) tst ugf stf.
 
   (*! Well-formedness of processes *)
 
@@ -76,30 +171,9 @@ Section ProcUpdGraph.
       | Fail _ => exists v, In v (trig_stv (proc_trig proc)) /\ hfind [HEltVid v] s = None
       end.
 
-  Definition ProcWfExecSame0 (proc: Process): Prop :=
-    forall upds,
-      genEvalEvent (EventUpd upds) proc = None ->
-      forall s, trsProc decls funcs mtrss proc (hupds s upds) = trsProc decls funcs mtrss proc s.
-
-  Definition ProcWfExecSame1 (proc: Process): Prop :=
-    forall s u,
-      trsProc decls funcs mtrss proc s = Sret u ->
-      forall base,
-        trsProc decls funcs mtrss proc (hupds base s) = Sret u.
-
-  Definition ProcWf (proc: Process): Prop :=
-    ProcWfExecUniq proc /\ ProcWfExecSucc proc /\ ProcWfExecSame0 proc /\ ProcWfExecSame1 proc.
-
-  Definition ProcsOk (procs: Processes): Prop :=
-    Forall ProcWf procs /\
-      TrsProcsRepConst decls funcs mtrss procs /\
-      TrsProcsRepProg decls funcs mtrss procs /\
-      ProcsWfUpd decls funcs mtrss procs /\
-      ProcsWfDet decls funcs mtrss procs.
-
   (*! Well-formedness of ugraphs wrt. associated processes *)
 
-  Definition UNodeProc (un: unode) (proc: Process): Prop :=
+  Definition UNodeCompute (un: unode) (proc: Process): Prop :=
     UNodeKeysOk un /\
       keys un <> nil /\
       deps un = trig_stv (proc_trig proc) /\
@@ -108,47 +182,36 @@ Section ProcUpdGraph.
                                | Fail _ => []
                                end).
 
-  Definition UGraphProcs (ug: ugraph) (procs: Processes): Prop :=
-    Forall2 UNodeProc ug procs.
+  Definition ProcSourceWf (proc: Process): Prop :=
+    ProcWfExecUniq proc /\ ProcWfExecSucc proc.
 
-  Definition UGraphIpsWf :=
-    forall ips initb,
-      UGraphUnique (getUGraph initb ips) /\
-        UGraphKeysOk (getUGraph initb ips) /\
-        UGraphDepsOk (getUGraph initb ips) /\
-        UGraphUpdOk (getUGraph initb ips) /\
-        UGraphUpdfOk (getUGraph initb ips) /\
-        UGraphSt (initState ips) (getUGraph initb ips) /\
-        UGraphCycleFree (getUGraph initb ips) /\
-        UGraphStateMono (getUGraph initb ips) /\
-        UGraphProcs (getUGraph initb ips) (List.map snd ips).
+  (** Source sweeps evaluate clocked blocks to collect next-flop outputs, but
+   * these blocks and the input placeholder do not update the active state.
+   * Their boundary values are already supplied by [initState]. *)
+  Definition UNodeSource (un: unode) (proc: Process): Prop :=
+    (UNodeCompute un proc /\ ProcSourceWf proc) \/
+    (updOnce un = true /\ updDone un = true /\
+      forall st u, trsProc decls funcs mtrss proc st = Sret u -> fst u = HMapEmpty).
 
-  Definition UGraphIpsStWf :=
-    forall ips0 st ugf stf,
-      EvalUGraphTrs (getUGraph false ips0) st ugf stf ->
-      forall ips1,
-        List.map snd ips0 = List.map snd ips1 ->
-        forall stu initb,
-          UGraphStWf (hupds stf stu) (getUGraph initb ips1).
+  Definition UGraphSource (ug: ugraph) (procs: Processes): Prop :=
+    Forall2 UNodeSource ug procs.
 
-  (*! Facts *)
-
-  Lemma UGraphProcs_upd:
-    forall ug1 un ug2 procs,
-      UGraphProcs (ug1 ++ un :: ug2) procs ->
-      forall nupdo nupdd,
-        UGraphProcs (ug1 ++ {| keys := keys un;
-                              deps := deps un;
-                              updOnce := nupdo;
-                              updDone := nupdd;
-                              updf := updf un |} :: ug2) procs.
-  Proof using .
-    unfold UGraphProcs; intros.
-    apply Forall2_app_inv_l in H3; destruct H3 as [procs1 [procs2 [? [? ?]]]]; subst procs.
-    destruct procs2 as [|proc procs2]; inv H4.
-    apply Forall2_app; [assumption|].
+  Lemma UGraphSource_upd: forall ug1 un ug2 procs,
+    UGraphSource (ug1 ++ un :: ug2) procs ->
+    UGraphSource (ug1 ++ {| keys := keys un; deps := deps un;
+      updOnce := true; updDone := true; updf := updf un |} :: ug2) procs.
+  Proof.
+    intros ug1 un ug2 procs Hrel.
+    apply Forall2_app_inv_l in Hrel.
+    destruct Hrel as [ps1 [ps2 [Hleft [Hright Heq]]]]; subst procs.
+    inversion Hright; subst.
+    apply Forall2_app; [exact Hleft|].
     constructor; [|assumption].
-    assumption.
+    match goal with Hnode: UNodeSource _ _ |- _ =>
+      destruct Hnode as [[Hnode Hwf] | [_ [_ Hempty]]]
+    end.
+    - left; split; assumption.
+    - right; split; [reflexivity|]; split; [reflexivity|exact Hempty].
   Qed.
 
 End ProcUpdGraph.
