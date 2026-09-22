@@ -591,17 +591,17 @@ Proof.
   }
   { punfold LEFT. red in LEFT.
     revert SIM. dependent induction LEFT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       gstep. econs; eauto. i. subst. gbase. (* eapply CIH0. *) eapply rclo7_clo. left. econs; ss; cycle 1.
-      { instantiate (1:=ktr_src0 x_tgt). rr in REL. pclearbot. eauto. }
+      { instantiate (1:=ktr_src0 x_tgt). try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto. }
       eapply rclo7_base. eauto.
     - guclo simg_indC_spec.
   }
   { punfold LEFT. red in LEFT.
     revert SIM. dependent induction LEFT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       gstep. econs; eauto. i. subst. gbase. (* eapply CIH0. *) eapply rclo7_clo. left. econs; ss; cycle 1.
-      { instantiate (1:=ktr_src0 tt). rr in REL. pclearbot. eauto. }
+      { instantiate (1:=ktr_src0 tt). try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto. }
       eapply rclo7_base. eauto.
     - guclo simg_indC_spec.
   }
@@ -612,26 +612,26 @@ Proof.
   { des.
     punfold LEFT. red in LEFT.
     dependent induction LEFT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       guclo simg_indC_spec. econs; eauto. esplits; eauto.
-      eapply IH; ss. rr in REL. pclearbot. eauto.
+      eapply IH; ss. try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto.
     - guclo simg_indC_spec.
   }
   { guclo simg_indC_spec. econs; eauto. i. eapply SIM; ss. }
   { punfold LEFT. red in LEFT.
     dependent induction LEFT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       guclo simg_indC_spec. econs; eauto. i.
-      eapply SIM; ss. rr in REL. pclearbot. eauto.
+      eapply SIM; ss. try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto.
     - guclo simg_indC_spec.
   }
   { des. guclo simg_indC_spec. }
   { gstep. econs; eauto. gbase. eapply rclo7_clo. eauto with paco. }
   { punfold LEFT. red in LEFT.
     revert SIM. dependent induction LEFT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       gstep. econs 11; eauto. i. subst. gbase. (* eapply CIH0. *) eapply rclo7_clo. left. econs; ss; cycle 1.
-      { instantiate (1:=ktr_src0 x_tgt). rr in REL. pclearbot. eauto. }
+      { instantiate (1:=ktr_src0 x_tgt). try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto. }
       eapply rclo7_base. eauto.
     - guclo simg_indC_spec.
   }
@@ -678,17 +678,17 @@ Proof.
   }
   { punfold RIGHT. red in RIGHT.
     revert SIM. dependent induction RIGHT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       gstep. econs; eauto. i. subst. gbase. (* eapply CIH0. *) eapply rclo7_clo. left. econs; ss; cycle 1.
-      { instantiate (1:=ktr_tgt0 x_tgt). rr in REL. pclearbot. eauto. }
+      { instantiate (1:=ktr_tgt0 x_tgt). try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto. }
       eapply rclo7_base. eauto.
     - guclo simg_indC_spec.
   }
   { punfold RIGHT. red in RIGHT.
     revert SIM. dependent induction RIGHT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       gstep. econs; eauto. i. subst. gbase. (* eapply CIH0. *) eapply rclo7_clo. left. econs; ss; cycle 1.
-      { instantiate (1:=ktr_tgt0 tt). rr in REL. pclearbot. eauto. }
+      { instantiate (1:=ktr_tgt0 tt). try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto. }
       eapply rclo7_base. eauto.
     - guclo simg_indC_spec.
   }
@@ -699,26 +699,26 @@ Proof.
   { des. guclo simg_indC_spec. }
   { punfold RIGHT. red in RIGHT.
     dependent induction RIGHT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       guclo simg_indC_spec. econs; eauto. esplits; eauto.
-      eapply SIM; ss. rr in REL. pclearbot. eauto.
+      eapply SIM; ss. try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto.
     - guclo simg_indC_spec.
   }
   { guclo simg_indC_spec. econs; eauto. i. eapply SIM; ss. }
   { des.
     punfold RIGHT. red in RIGHT.
     dependent induction RIGHT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       guclo simg_indC_spec. econs; eauto. esplits; eauto.
-      eapply IH; ss. rr in REL. pclearbot. eauto.
+      eapply IH; ss. try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto.
     - guclo simg_indC_spec.
   }
   { gstep. econs; eauto. gbase. eapply rclo7_clo. eauto with paco. }
   { punfold RIGHT. red in RIGHT.
     revert SIM. dependent induction RIGHT; i; des_ifs; simpl_existTs; subst; simpobs_all.
-    - rewrite bind_trigger in Heq. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
+    - try match goal with H : _ = _ |- _ => rewrite bind_trigger in H end. clarify. simpl_existTs. subst. rewrite <- bind_trigger.
       gstep. econs 11; eauto. i. subst. gbase. (* eapply CIH0. *) eapply rclo7_clo. left. econs; ss; cycle 1.
-      { instantiate (1:=ktr_tgt0 x_tgt). rr in REL. pclearbot. eauto. }
+      { instantiate (1:=ktr_tgt0 x_tgt). try setoid_rewrite bind_ret_l in REL. rr in REL. pclearbot. eauto. }
       eapply rclo7_base. eauto.
     - guclo simg_indC_spec.
   }

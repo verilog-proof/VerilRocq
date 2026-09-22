@@ -1129,7 +1129,7 @@ Section UGraph.
     Qed.
 
     Lemma getDepsUpdDone_updf_const:
-      forall ug (Hugf: UGraphUpdfOk ug) un,
+      forall ug un,
         In un ug ->
         forall st1 st2,
           UStSub ug st1 st2 ->
@@ -1153,10 +1153,16 @@ Section UGraph.
       eapply H4; eassumption.
     Qed.
 
-    Lemma EvalUGraph_UpdfSub:
+    Definition UGraphUpdfAt (st: State) (ug: ugraph): Prop :=
+      Forall (fun un =>
+        (forall v, In v (keys un) ->
+          hfind [HEltVid v] (hupds st (updf un st)) =
+          hfind [HEltVid v] (updf un st)) /\ UNodeUpdfConst un) ug.
+
+    Lemma EvalUGraph_UpdfSub_at:
       forall ug1 (Hugu: UGraphUnique ug1)
              (Hugk: UGraphKeysOk ug1)
-             (Hugf: UGraphUpdfOk ug1) st1,
+             st1 (Hugf: UGraphUpdfAt st1 ug1),
         UpdfSub ug1 st1 ->
         forall ug2 st2,
           EvalUGraph ug1 st1 ug2 st2 ->
@@ -1167,7 +1173,7 @@ Section UGraph.
       inv H4.
       rename ug0 into ug1; rename ug3 into ug2.
       assert (In un (ug1 ++ un :: ug2)) as Huni by (apply in_or_app; right; left; reflexivity).
-      pose proof (getDepsUpdDone_updf_const Hugf _ Huni Huss) as Hupdfc.
+      pose proof (getDepsUpdDone_updf_const _ Huni Huss) as Hupdfc.
       clear Huni Huss.
       apply Forall_app in H3; dest; inv H4; dest.
       apply Forall_app; split; [|constructor].
@@ -1184,7 +1190,7 @@ Section UGraph.
           rewrite H8.
           apply Forall_app in Hugf; dest.
           rewrite Forall_forall in H12; specialize (H12 _ H4).
-          red in H12; dest.
+          dest.
           erewrite H14; [reflexivity|].
           intros dk1; intros.
           eapply EvalUGraph_updf_others; [eassumption|].
@@ -1204,7 +1210,7 @@ Section UGraph.
 
           move Hugf at bottom.
           apply Forall_app in Hugf; dest; inv H11.
-          red in H14; dest.
+          dest.
           rewrite H11 by assumption. (* [UNodeUpdfUpd] *)
           red in H12.
           specialize (H12 st1 (hupds st1 (updf un st1))).
@@ -1223,7 +1229,7 @@ Section UGraph.
           rewrite H10.
           apply Forall_app in Hugf; dest; inv H13.
           rewrite Forall_forall in H17; specialize (H17 _ H4).
-          red in H17; dest.
+          dest.
           erewrite H14; [reflexivity|].
           intros dk2; intros.
           eapply EvalUGraph_updf_others; [eassumption|].
@@ -1234,6 +1240,18 @@ Section UGraph.
             [|apply in_or_app; right; left; reflexivity].
           subst dun2.
           congruence.
+    Qed.
+
+    Lemma EvalUGraph_UpdfSub:
+      forall ug1, UGraphUnique ug1 -> UGraphKeysOk ug1 ->
+      UGraphUpdfOk ug1 -> forall st1, UpdfSub ug1 st1 ->
+      forall ug2 st2, EvalUGraph ug1 st1 ug2 st2 -> UpdfSub ug2 st2.
+    Proof.
+      intros ug1 Hu Hk Hf st1 Hsub ug2 st2 Hstep.
+      eapply EvalUGraph_UpdfSub_at; try eassumption.
+      unfold UGraphUpdfAt; apply Forall_forall; intros un Hin.
+      eapply Forall_In in Hf; [|exact Hin].
+      destruct Hf as [Hupd Hconst]; split; [intros; apply Hupd; assumption|exact Hconst].
     Qed.
 
     Lemma EvalUGraphTrs_UpdfSub:
@@ -1270,7 +1288,7 @@ Section UGraph.
       inv H6.
       rename ug3 into ug1; rename ug4 into ug2.
       assert (In un (ug1 ++ un :: ug2)) as Huni by (apply in_or_app; right; left; reflexivity).
-      pose proof (getDepsUpdDone_updf_const Hugf _ Huni H5) as Hupdfc.
+      pose proof (getDepsUpdDone_updf_const _ Huni H5) as Hupdfc.
 
       unfold UGSub, UStSub in *.
       apply Forall_app in H5; dest; inv H6.

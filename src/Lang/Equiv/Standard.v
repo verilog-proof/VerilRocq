@@ -73,10 +73,10 @@ Section Standard.
                          | Fail _ => nil
                          end
         | VExprHier pe ce => getSLExpr pe
-        | VExprPriSelect se ie => getSLExpr se
-        | VExprPriSelectConstRange se le re => getSLExpr se
-        | VExprPriSelectIdxRangeAdd se le re => getSLExpr se
-        | VExprPriSelectIdxRangeSub se le re => getSLExpr se
+        | VExprPriSelect se ie => getSLExpr se ++ getSLExpr ie
+        | VExprPriSelectConstRange se le re => getSLExpr se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeAdd se le re => getSLExpr se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeSub se le re => getSLExpr se ++ getSLExpr le ++ getSLExpr re
         | VExprPriConcat es => list_map getSLExpr es
         | VExprPriMultConcat ne ces => (getSLExpr ne) ++ (list_map getSLExpr ces)
         | VExprTfCall tfid aes => list_map getSLExpr aes
@@ -87,6 +87,30 @@ Section Standard.
         | VExprBinOp op le re => (getSLExpr le) ++ (getSLExpr re)
         | VExprCond ce te fe => (getSLExpr ce) ++ (getSLExpr te) ++ (getSLExpr fe)
         | VExprInside ie res => (getSLExpr ie) ++ (list_map getSLExpr res)
+        end.
+
+      (** An lvalue writes its base and reads its index expressions. *)
+      Fixpoint getSLWriteExpr (e: @VExpr vid_t): list stvu :=
+        match e with
+        | VExprId vid => getSLExpr (VExprId vid)
+        | VExprHier pe _ => getSLWriteExpr pe
+        | VExprPriSelect se _ => getSLWriteExpr se
+        | VExprPriSelectConstRange se _ _ => getSLWriteExpr se
+        | VExprPriSelectIdxRangeAdd se _ _ => getSLWriteExpr se
+        | VExprPriSelectIdxRangeSub se _ _ => getSLWriteExpr se
+        | VExprPriConcat es => list_map getSLWriteExpr es
+        | _ => nil
+        end.
+
+      Fixpoint getSLLvalueReads (e: @VExpr vid_t): list stvu :=
+        match e with
+        | VExprHier pe _ => getSLLvalueReads pe
+        | VExprPriSelect se ie => getSLLvalueReads se ++ getSLExpr ie
+        | VExprPriSelectConstRange se le re => getSLLvalueReads se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeAdd se le re => getSLLvalueReads se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeSub se le re => getSLLvalueReads se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriConcat es => list_map getSLLvalueReads es
+        | _ => nil
         end.
 
       (** Standard 9.2.2.2.1 Implicit always_comb sensitivities *)
@@ -122,8 +146,8 @@ Section Standard.
 
       Fixpoint getSLStatementReads (sti: @VStatementItem vid_t): list stvu :=
         match sti with
-        | VStatementItemBlockingAssignNormal lv e => getSLExpr e
-        | VStatementItemNonblockingAssign lv e => getSLExpr e
+        | VStatementItemBlockingAssignNormal lv e => getSLLvalueReads lv ++ getSLExpr e
+        | VStatementItemNonblockingAssign lv e => getSLLvalueReads lv ++ getSLExpr e
         | VStatementCase cty ce css =>
             (getSLExpr ce)
               ++ (getSLStatementCase true getSLExpr getSLStatementReads css)
@@ -145,8 +169,8 @@ Section Standard.
 
       Fixpoint getSLStatementWrites (sti: @VStatementItem vid_t): list stvu :=
         match sti with
-        | VStatementItemBlockingAssignNormal lv e => getSLExpr lv
-        | VStatementItemNonblockingAssign lv e => getSLExpr lv
+        | VStatementItemBlockingAssignNormal lv e => getSLWriteExpr lv
+        | VStatementItemNonblockingAssign lv e => getSLWriteExpr lv
         | VStatementCase cty ce css =>
             getSLStatementCase false getSLExpr getSLStatementWrites css
         | VStatementCond ce tsti ofsti =>
@@ -165,7 +189,7 @@ Section Standard.
         end.
 
       Definition getSLStatement (sti: @VStatementItem vid_t): list stvu :=
-        List.filter (fun p => List.existsb (vid_eqb p) (getSLStatementWrites sti))
+        List.filter (fun p => negb (List.existsb (vid_eqb p) (getSLStatementWrites sti)))
           (getSLStatementReads sti).
 
       Definition getSLModuleInsMInput (ivids: list vid_t) (npc: @VNamedPortConn vid_t): list stvu :=
@@ -198,7 +222,7 @@ Section Standard.
                                       end
                                  else nil
         | VNamedPortConnE vid ie => if List.existsb (vid_eqb vid) ovids
-                                    then (getSLExpr ie)
+                                    then (getSLWriteExpr ie)
                                     else nil
         | VNamedPortConnW => nil
         end.
@@ -223,7 +247,7 @@ Section Standard.
         match mins with
         | VModuleInsOne mid params (VHierInsOne iid (VPortConnsNamed npcs)) =>
             match mtrss mid with
-            | Sret mtrs => getSLModuleInsMOutputs mtrs.(mtrs_input_vids) npcs
+            | Sret mtrs => getSLModuleInsMOutputs mtrs.(mtrs_output_vids) npcs
             | Fail _ => nil
             end
         end.
@@ -315,7 +339,7 @@ Section Standard.
 
         Definition getProcsAssign (a: @VAssign vid_t): Processes :=
           match a with
-          | VAssignO lv e => [{| proc_trig := TrigStv (getSLExpr cpos e);
+          | VAssignO lv e => [{| proc_trig := TrigStv (getSLLvalueReads cpos lv ++ getSLExpr cpos e);
                                 proc_pos := cpos;
                                 proc_evu := EvalUnitAssign lv e |}]
           end.
@@ -495,6 +519,16 @@ Section Standard.
             nregion = region1 ++ nev :: region2 ->
             ExecEventRegion ev region nev nregion.
 
+      (** The active event and its NBA update belong to the same process slot. *)
+      Definition NbaSameSlot (act nact nba nnba: Region)
+        (ev: Event) (upd: State): Prop :=
+        exists act1 act2 nba1 nba2 old,
+          length act1 = length nba1 /\
+          act = act1 ++ Some ev :: act2 /\
+          nact = act1 ++ None :: act2 /\
+          nba = nba1 ++ old :: nba2 /\
+          nnba = nba1 ++ Some (EventUpd upd) :: nba2.
+
       Definition EventUpdClk (ev: Event): Prop :=
         match ev with
         | EventClkPosedge => True
@@ -531,6 +565,7 @@ Section Standard.
           execEvalEvent s1 cpos evu = Sret (uacts, unbas) ->
           ExecEventRegion (Some (EventEval false cpos evu)) act None nact ->
           ExecEventRegion curNba nba (Some (EventUpd unbas)) nnba ->
+          NbaSameSlot act nact nba nnba (EventEval false cpos evu) unbas ->
           ExecEvent s1 act nba s1 nact nnba.
 
       Inductive ExecEvents:
@@ -621,14 +656,19 @@ Section Standard.
 
       (** Predicates *)
 
+      (** The equivalence proof starts with one update slot per process and an
+       * empty NBA region. Arbitrary regions can contain unscheduled evaluation
+       * events, have the wrong length, or have both regions nonempty. *)
       Definition NbaFree: Prop :=
-        forall s1 act s2 nba,
-          Forall (fun oe => oe <> Some EventClkPosedge) act ->
-          ExecActiveRegion s1 act s2 nba ->
+        forall s1 inits s2 nba,
+          List.length inits = List.length procs ->
+          ExecActiveRegion s1 (initsR inits) s2 nba ->
           nba = nilR.
 
       Definition ExecTimeSlotProg: Prop :=
-        forall s1 acts nbas, exists s2, ExecTimeSlot s1 acts nbas s2.
+        forall s1 inits,
+          List.length inits = List.length procs ->
+          exists s2, ExecTimeSlot s1 (initsR inits) nilR s2.
 
       Definition StdOk: Prop :=
         NbaFree /\ ExecTimeSlotProg.
@@ -750,6 +790,164 @@ Section Standard.
     Proof using .
       induction 1; simpl; intros; dest; [intuition|].
       rewrite <-H5, <-H6; intuition.
+    Qed.
+
+    (** Update-only initial regions cannot schedule NBA evaluation events. *)
+    Lemma ExecEventRegion_in : forall ev act nev nact,
+      ExecEventRegion ev act nev nact -> In ev act.
+    Proof.
+      intros ev act nev nact Hregion; destruct Hregion; subst.
+      apply in_or_app; right; left; reflexivity.
+    Qed.
+
+    Lemma ExecEventRegion_nilR_no_some: forall procs ev act nev,
+      ExecEventRegion ev act (Some nev) (nilR procs) -> False.
+    Proof.
+      intros procs ev act nev Hregion; inversion Hregion; subst.
+      assert (Hin: In (Some nev) (nilR procs)).
+      { match goal with Heq: nilR procs = _ |- _ => rewrite Heq end.
+        apply in_or_app; right; left; reflexivity. }
+      apply in_map_iff in Hin; destruct Hin as [proc [Heq _]]; discriminate.
+    Qed.
+
+    Lemma ExecEvent_has_event : forall procs s act nba s' act' nba',
+      ExecEvent decls funcs mtrss procs s act nba s' act' nba' ->
+      exists ev, In (Some ev) act.
+    Proof.
+      intros procs s act nba s' act' nba' Hexec; destruct Hexec.
+      - exists ev; apply in_or_app; right; left; reflexivity.
+      - eexists; eapply ExecEventRegion_in; eassumption.
+      - eexists; eapply ExecEventRegion_in; eassumption.
+    Qed.
+
+    Lemma ExecEvent_nilR_false : forall procs s nba s' act' nba',
+      ExecEvent decls funcs mtrss procs s (nilR procs) nba s' act' nba' -> False.
+    Proof.
+      intros procs s nba s' act' nba' Hexec.
+      destruct (ExecEvent_has_event Hexec) as [ev Hin].
+      apply in_map_iff in Hin; destruct Hin as [proc [Heq _]]; discriminate.
+    Qed.
+
+    Definition ActiveOnly (oe : option Event) : Prop :=
+      match oe with
+      | None | Some (EventUpd _) | Some (EventEval true _ _) => True
+      | _ => False
+      end.
+
+    Lemma region_active_only : forall ev act nev nact,
+      ExecEventRegion ev act nev nact ->
+      Forall ActiveOnly act -> ActiveOnly ev /\
+        (ActiveOnly nev -> Forall ActiveOnly nact).
+    Proof.
+      intros ev act nev nact Hex Hact.
+      destruct Hex as [region region1 ev region2 Heq nregion nev Hneq].
+      subst region nregion.
+      apply Forall_app in Hact; destruct Hact as [Hpre Htail].
+      inversion Htail; subst.
+      split; [assumption|].
+      intros Hnev; apply Forall_app; split; [assumption|].
+      constructor; assumption.
+    Qed.
+
+    Lemma gen_update_active_only : forall upd procs act nact,
+      GenEvalEvents (EventUpd upd) procs act nact ->
+      Forall ActiveOnly act -> Forall ActiveOnly nact.
+    Proof.
+      intros upd procs act nact Hgen; induction Hgen; intros Hact.
+      - constructor.
+      - inversion Hact; subst.
+        constructor; [|apply IHHgen; assumption].
+        destruct (genEvalEvent (EventUpd upd) proc) as [nev|] eqn:HgenEv; [|assumption].
+        apply genEvalEvent_Some in HgenEv; subst nev; exact I.
+    Qed.
+
+    Lemma exec_event_active_only : forall procs s act nba s' act' nba',
+      ExecEvent decls funcs mtrss procs s act nba s' act' nba' ->
+      Forall ActiveOnly act ->
+      Forall ActiveOnly act' /\ nba' = nba.
+    Proof.
+      intros procs s act nba s' act' nba' Hexec; destruct Hexec; intros Hact.
+      - apply Forall_app in Hact; destruct Hact as [Hpre Htail].
+        inversion Htail; subst.
+        destruct ev; simpl in *; try contradiction.
+        split; [|reflexivity].
+        apply Forall_app; split.
+        + eapply gen_update_active_only; eassumption.
+        + constructor; [exact I|].
+          eapply gen_update_active_only; eassumption.
+      - split; [|reflexivity].
+        eapply region_active_only in H4; [|eassumption].
+        apply H4; exact I.
+      - eapply region_active_only in H4; [|eassumption].
+        destruct H4 as [Hfalse _]; contradiction.
+    Qed.
+
+    Lemma exec_events_active_only : forall procs s act nba s' act' nba',
+      ExecEvents decls funcs mtrss procs s act nba s' act' nba' ->
+      Forall ActiveOnly act -> nba' = nba.
+    Proof.
+      intros procs s act nba s' act' nba' Hexec; induction Hexec; intros Hact.
+      - reflexivity.
+      - apply exec_event_active_only in H3; [|assumption].
+        destruct H3 as [Hact1 Hnba1].
+        rewrite (IHHexec Hact1); assumption.
+    Qed.
+
+    Lemma initsR_active_only : forall inits,
+      Forall ActiveOnly (initsR inits).
+    Proof.
+      intros inits; unfold initsR; apply Forall_forall.
+      intros oe Hin; apply in_map_iff in Hin.
+      destruct Hin as [init [Heq _]]; subst oe.
+      destruct init; exact I.
+    Qed.
+
+    Lemma NbaFree_inits : forall procs,
+      NbaFree decls funcs mtrss procs.
+    Proof.
+      intros procs s inits s' nba Hlen Hexec.
+      unfold ExecActiveRegion in Hexec.
+      eapply exec_events_active_only; [exact Hexec|].
+      apply initsR_active_only.
+    Qed.
+
+    Lemma ExecTimeSlot_inits_events : forall procs s inits s',
+      ExecTimeSlot decls funcs mtrss procs s (initsR inits) (nilR procs) s' ->
+      ExecEvents decls funcs mtrss procs s (initsR inits) (nilR procs)
+        s' (nilR procs) (nilR procs).
+    Proof.
+      intros procs s inits s' Hslot.
+      apply ExecTimeSlot_nba_nilR_inv in Hslot.
+      destruct Hslot as [si [nba [Hactive Hnext]]].
+      assert (Hnba: nba = nilR procs).
+      { eapply exec_events_active_only; [exact Hactive|apply initsR_active_only]. }
+      subst nba. apply ExecTimeSlot_nilR_inv in Hnext. subst si.
+      exact Hactive.
+    Qed.
+
+    Lemma ExecTimeSlot_inits_invariant : forall procs (Inv: State -> Region -> Prop),
+      (forall s act s' act',
+        Inv s act ->
+        ExecEvent decls funcs mtrss procs s act (nilR procs)
+          s' act' (nilR procs) -> Inv s' act') ->
+      forall s inits s',
+        Inv s (initsR inits) ->
+        ExecTimeSlot decls funcs mtrss procs s (initsR inits) (nilR procs) s' ->
+        Inv s' (nilR procs).
+    Proof.
+      intros procs Inv Hstep.
+      assert (Hpres: forall s act nba s' act' nba',
+        ExecEvents decls funcs mtrss procs s act nba s' act' nba' ->
+        Forall ActiveOnly act -> nba = nilR procs -> Inv s act -> Inv s' act').
+      { intros s act nba s' act' nba' Hrun; induction Hrun;
+          intros Hact Hnba Hinv; [exact Hinv|].
+        pose proof (exec_event_active_only H3 Hact) as [Hact1 Hnba1].
+        subst nba0 nba1.
+        apply IHHrun; [exact Hact1|reflexivity|].
+        eapply Hstep; eassumption. }
+      intros s inits s' Hinit Hslot.
+      apply ExecTimeSlot_inits_events in Hslot.
+      eapply Hpres; [exact Hslot|apply initsR_active_only|reflexivity|exact Hinit].
     Qed.
 
   End Facts.

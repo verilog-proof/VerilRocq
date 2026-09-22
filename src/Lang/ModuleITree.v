@@ -1,4 +1,4 @@
-Require Import Coq.Lists.Streams Coq.Program.Equality.
+From Stdlib Require Import Streams.Streams Program.Equality.
 Require Import Lib.Common Lib.HMap.
 Require Import Lang.Semantics.
 From ExtLib Require Import Monad.

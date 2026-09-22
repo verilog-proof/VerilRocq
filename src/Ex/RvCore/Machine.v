@@ -4,7 +4,8 @@ Import OStateOperations.
 Require Import riscv.Utility.MonadNotations.
 Require Import coqutil.Map.Interface.
 Require Import riscv.Spec.Decode.
-Require Import riscv.Platform.Memory.
+Require Import riscv.Spec.LeakageOfInstr.
+Require Export Ex.RvCore.TupleMemory.
 Require Import Coq.ZArith.ZArith.
 Require Import riscv.Utility.MkMachineWidth.
 
@@ -87,7 +88,7 @@ Context {width: Z} {BW: Bitwidth width} {word: Interface.word width} {word_ok: w
       | Execute => Return (mach.(getDataMem))
       | _ => fail_hard
     end;
-    fail_if_None (Memory.load_bytes n dmem a).
+    fail_if_None (TupleMemory.load_bytes n dmem a).
 
   (* We only allow stores to the data memory. *)
   Definition storeN (n: nat) (kind: SourceType) (a: word) (v: HList.tuple byte n) :=
@@ -98,7 +99,7 @@ Context {width: Z} {BW: Bitwidth width} {word: Interface.word width} {word_ok: w
       | Execute => Return (mach.(getDataMem))
       | _ => fail_hard
     end;
-    dmem' <- fail_if_None (Memory.store_bytes n dmem a v);
+    dmem' <- fail_if_None (TupleMemory.store_bytes n dmem a v);
     update (fun mach => (withDataMem dmem' mach)).
 
 
@@ -154,4 +155,30 @@ Context {width: Z} {BW: Bitwidth width} {word: Interface.word width} {word_ok: w
     (* fail hard if an exception is thrown. *)
     endCycleEarly{A: Type} := fail_hard;
   }.
+
+  (* This functional model does not record leakage events. *)
+  #[export] Instance IsRiscvProgramWithLeakage:
+    RiscvProgramWithLeakage (OState RiscvMachine') word := {
+    RVP := IsRiscvProgram;
+    leakEvent _ := Return tt;
+  }.
+
+  Lemma leakage_preserves_state instr (s : RiscvMachine') :
+    snd (leakage_of_instr
+      (Machine.getRegister (RiscvProgram := IsRiscvProgram)) instr s) = s.
+  Proof.
+    destruct instr;
+      try match goal with i : InstructionI |- _ => destruct i end;
+      try match goal with i : InstructionM |- _ => destruct i end;
+      try match goal with i : InstructionI64 |- _ => destruct i end;
+      try match goal with i : InstructionM64 |- _ => destruct i end;
+      cbn [leakage_of_instr instr_leakage leakage_of_instr_I leakage_of_instr_M
+           leakage_of_instr_I64 leakage_of_instr_M64 Bind Return OState_Monad
+           Machine.getRegister IsRiscvProgram OStateOperations.get
+           OStateOperations.fail_hard];
+      repeat match goal with
+      | |- context [if ?b then _ else _] => destruct b; cbn
+      | |- context [map.get ?m ?r] => destruct (map.get m r); cbn
+      end; reflexivity.
+  Qed.
 End Riscv.

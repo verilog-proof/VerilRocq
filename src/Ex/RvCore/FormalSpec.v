@@ -71,10 +71,10 @@ Section WithCtx.
     Qed.
 
     Lemma zeroed_load_bytes n (addr : word) :
-      exists tup, Memory.load_bytes n zeroed addr = Some tup /\ LittleEndian.combine n tup = 0%Z.
+      exists tup, TupleMemory.load_bytes n zeroed addr = Some tup /\ LittleEndian.combine n tup = 0%Z.
     Proof.
-      unfold Memory.load_bytes, map.getmany_of_tuple.
-      remember (Memory.footprint addr n) as addresses eqn: H. clear H addr.
+      unfold TupleMemory.load_bytes, map.getmany_of_tuple.
+      remember (TupleMemory.footprint addr n) as addresses eqn: H. clear H addr.
       revert addresses. induction n as [|n' IH].
       - intros. eexists. cbn. eauto.
       - intros. edestruct IH as (addresses' & Haddrs & Hcombine).
@@ -95,7 +95,30 @@ Section WithCtx.
   |}.
 
   Definition run1: OState State unit :=
-    fun (s : State) => Run.run1 (RVP := RvCore.Machine.IsRiscvProgram) (RVS := Machine.DefaultRiscvState) Decode.RV32I s.
+    fun (s : State) => Run.run1 (RVM := RvCore.Machine.IsRiscvProgramWithLeakage) (RVS := Machine.DefaultRiscvState) Decode.RV32I s.
+
+  (* A successful leakage calculation leaves the functional execution unchanged. *)
+  Lemma run1_success s s' :
+    run1 s = (Some tt, s') ->
+    Bind Machine.getPC (fun pc =>
+      Bind (Machine.loadWord Fetch pc) (fun inst =>
+        Bind (Execute.execute (Decode.decode Decode.RV32I (LittleEndian.combine 4 inst)))
+          (fun _ => Machine.endCycleNormal))) s = (Some tt, s').
+  Proof.
+    unfold run1, Run.run1.
+    cbn [Bind Return OState_Monad Machine.getPC Machine.leakEvent Machine.RVP
+         IsRiscvProgramWithLeakage IsRiscvProgram OStateOperations.get].
+    destruct (Machine.loadWord (RiscvProgram := IsRiscvProgram) Fetch (getPc s) s)
+      as [[inst|] loaded_state]; [|discriminate].
+    pose proof (leakage_preserves_state
+      (Decode.decode Decode.RV32I (LittleEndian.combine 4 inst)) loaded_state) as Hstate.
+    destruct (LeakageOfInstr.leakage_of_instr
+      (Machine.getRegister (RiscvProgram := IsRiscvProgram))
+      (Decode.decode Decode.RV32I (LittleEndian.combine 4 inst)) loaded_state)
+      as [event leaked_state].
+    cbn in Hstate. subst leaked_state.
+    destruct event; [auto|discriminate].
+  Qed.
 
   (* input/output events of a RISC-V cpu. *)
   Variant riscv_ioE : Type -> Type :=
@@ -117,7 +140,7 @@ Section WithCtx.
     List.fold_right (fun iv mem =>
       let addr := word.of_Z (4 * fst iv) in
       let bytes := LittleEndian.split 4 (snd iv) in
-      Memory.unchecked_store_bytes 4 mem addr bytes
+      TupleMemory.unchecked_store_bytes 4 mem addr bytes
     ) zeroed initial_imem.
 End WithCtx.
 

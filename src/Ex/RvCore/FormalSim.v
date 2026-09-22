@@ -67,7 +67,7 @@ Section proof.
   Definition mem_related (formal_mem : Mem) (impl_mem : list (Z * hmap)) : Prop :=
     forall (addr : word) (inst_ind : Z),
     (word.unsigned addr) = 4 * inst_ind ->                                            (* if an address is aligned to 4 bytes, *)
-      exists tup, Memory.load_bytes 4 formal_mem addr = Some tup  /\                  (* the load on formal_mem succeeds, and *)
+      exists tup, TupleMemory.load_bytes 4 formal_mem addr = Some tup  /\                  (* the load on formal_mem succeeds, and *)
       LittleEndian.combine 4 tup = szNormZ (hbits (array_select impl_mem inst_ind)).  (* its value is related to the load value of the impl_mem. *)
 
   Definition imem_related (formal_imem : Mem) (impl_imem : ICache.Flops) : Prop :=
@@ -172,7 +172,7 @@ Section proof.
     (ADDR_UNSIGNED : snof addr_sz = false)
     (ALIGNED : word.unsigned addr_w mod 4 = 0) :
     exists tup,
-      Memory.load_bytes 4 formal_mem addr_w = Some tup /\
+      TupleMemory.load_bytes 4 formal_mem addr_w = Some tup /\
       LittleEndian.combine 4 tup = szNormZ (hbits (hselectA impl_mem (szNormZ (szRange addr_sz 31 2)))).
   Proof.
     enough (word.unsigned addr_w = 4 * (szNormZ (szRange addr_sz 31 2))).
@@ -309,7 +309,7 @@ Section proof.
       - (* base case *)
         assert (FormalSpec.formal_initial_imem nil = FormalSpec.zeroed) as -> by reflexivity.
         epose proof (FormalSpec.zeroed_load_bytes _ _) as (? & -> & Hcomb). eexists. split; [reflexivity|].
-        rewrite Hcomb. reflexivity.
+        exact Hcomb.
       - (* inductive case *)
         destruct IH as (tup_prev & Hprev_acc & Harr_select).
         { apply Forall_inv_tail in IMEM_OK. exact IMEM_OK. }
@@ -319,7 +319,7 @@ Section proof.
         destruct (Z.eq_dec a access_ind) as [-> | NEQ].
 
         + exists (LittleEndian.split 4 val).
-          unfold Memory.load_bytes, Memory.unchecked_store_bytes, map.getmany_of_tuple, map.putmany_of_tuple. simpl.
+          unfold TupleMemory.load_bytes, TupleMemory.unchecked_store_bytes, map.getmany_of_tuple, map.putmany_of_tuple. simpl.
           assert (word.of_Z (4 * access_ind) = access_w) as ->. { apply word.unsigned_inj. rewrite <- H. rewrite word.of_Z_unsigned. reflexivity. }
           progress repeat (rewrite map.get_put_same || rewrite map.get_put_diff).
           2-7:
@@ -336,7 +336,7 @@ Section proof.
         + exists tup_prev.
           apply Forall_inv in IMEM_OK. simpl in IMEM_OK.
           split.
-          * unfold Memory.load_bytes, map.getmany_of_tuple. cbn.
+          * unfold TupleMemory.load_bytes, map.getmany_of_tuple. cbn.
             assert (access_w <> word.of_Z (4 * a)) as Haccess_w.
             { intros ->. rewrite word.unsigned_of_Z in H. unfold word.wrap in H. rewrite Z.mod_small in H; lia. }
             clear -Haccess_w H word_ok mem_ok IMEM_OK Hprev_acc.
@@ -361,7 +361,7 @@ Section proof.
     assert (dmem_related (getDataMem f1) (Spec.dcache_v sf1)) as DMEM_REL.
     { rewrite Hf1, Hsf1. unfold dmem_related. cbn. unfold mem_related. intros.
       epose proof (FormalSpec.zeroed_load_bytes _ _) as (? & -> & Hcomb). eexists. split; [eauto|].
-      rewrite Hcomb. cbn. dest_if; reflexivity. }
+      cbn. dest_if; exact Hcomb. }
 
     assert (rf_related (getRegs f1) (Spec.rf_v sf1)) as RF_REL.
     { rewrite Hf1, Hsf1. unfold rf_related. cbn. intros k NEQ.
@@ -418,7 +418,7 @@ Section proof.
     }
     (* Case: the instruction has been successful executed. *)
     repeat (autorewrite with itree; cbn). subst hide_target.
-    unfold FormalSpec.run1, Run.run1 in Hrun.
+    apply FormalSpec.run1_success in Hrun.
 
     let T := type of Hrun in let T' := (eval simpl in T) in replace T with T' in Hrun by (simpl; reflexivity).
     (* equivalent 'simpl in Hrun' but faster for kernel check. See https://github.com/coq/coq/wiki/Troubleshooting *)
@@ -755,7 +755,7 @@ Section proof.
         let calculated_w := Utility.add rsv1_w (Utility.ZToReg (BitOps.signExtend 12 imm_i)) in
         word.unsigned calculated_w mod 4 = 0 ->
           exists tup,
-            Memory.load_bytes 4 f1_data_mem calculated_w = Some tup /\
+            TupleMemory.load_bytes 4 f1_data_mem calculated_w = Some tup /\
             LittleEndian.combine_deprecated 4 tup =
             szNormZ (hbits (hselectA (dmem) (BitOps.bitSlice (szNorm calculated_sz) 2 (32)))))
             as Hload_helper.
@@ -831,8 +831,8 @@ Section proof.
         progress fold calculated_w in Hloaded_word.
 
         (* Simplify some hypotheses. *)
-        rewrite Hf1 in Hrun at 1. cbn -[calculated_w Memory.load_bytes Machine.setRegister] in Hrun.
-        destruct (Memory.load_bytes 1 f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
+        rewrite Hf1 in Hrun at 1. cbn -[calculated_w TupleMemory.load_bytes Machine.setRegister] in Hrun.
+        destruct (TupleMemory.load_bytes 1 f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
         progress cbn -[Machine.setRegister] in Hrun.
 
         (* show that the loaded byte is related. *)
@@ -846,8 +846,8 @@ Section proof.
           rewrite <- LOADED_WORD_REL. setoid_rewrite sznormZ_bitSlice_fit; [|lia].
           unfold word.wrap. repeat f_equal.
 
-          (* simplify Memory.load_bytes. *)
-          unfold Memory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
+          (* simplify TupleMemory.load_bytes. *)
+          unfold TupleMemory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
           do 4 let H := fresh Hget in destruct (map.get f1_data_mem _) eqn: H in Hloaded_word; [|discriminate Hloaded_word].
           rewrite Hget in Hload.
           inversion Hload. inversion Hloaded_word.
@@ -891,8 +891,8 @@ Section proof.
         progress fold calculated_w in Hloaded_word.
 
         (* Simplify some hypotheses. *)
-        rewrite Hf1 in Hrun at 1. cbn -[calculated_w Memory.load_bytes Machine.setRegister] in Hrun.
-        destruct (Memory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
+        rewrite Hf1 in Hrun at 1. cbn -[calculated_w TupleMemory.load_bytes Machine.setRegister] in Hrun.
+        destruct (TupleMemory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
         progress cbn -[Machine.setRegister] in Hrun.
 
         (* show that the loaded half-byte is related. *)
@@ -906,8 +906,8 @@ Section proof.
           rewrite <- LOADED_WORD_REL. setoid_rewrite sznormZ_bitSlice_fit; [|lia].
           unfold word.wrap. repeat f_equal.
 
-          (* simplify Memory.load_bytes. *)
-          unfold Memory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
+          (* simplify TupleMemory.load_bytes. *)
+          unfold TupleMemory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
           do 4 let H := fresh Hget in destruct (map.get f1_data_mem _) eqn: H in Hloaded_word; [|discriminate Hloaded_word].
           rewrite Hget, Hget0 in Hload.
           inversion Hload. inversion Hloaded_word.
@@ -961,8 +961,8 @@ Section proof.
         progress fold calculated_w in Hloaded_word.
 
         (* Simplify some hypotheses. *)
-        rewrite Hf1 in Hrun at 1. cbn -[calculated_w Memory.load_bytes Machine.setRegister] in Hrun.
-        destruct (Memory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
+        rewrite Hf1 in Hrun at 1. cbn -[calculated_w TupleMemory.load_bytes Machine.setRegister] in Hrun.
+        destruct (TupleMemory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
         progress cbn -[Machine.setRegister] in Hrun.
 
         (* show that the loaded value is related. *)
@@ -1019,8 +1019,8 @@ Section proof.
         progress fold calculated_w in Hloaded_word.
 
         (* Simplify some hypotheses. *)
-        rewrite Hf1 in Hrun at 1. cbn -[calculated_w Memory.load_bytes Machine.setRegister] in Hrun.
-        destruct (Memory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
+        rewrite Hf1 in Hrun at 1. cbn -[calculated_w TupleMemory.load_bytes Machine.setRegister] in Hrun.
+        destruct (TupleMemory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
         progress cbn -[Machine.setRegister] in Hrun.
 
         (* show that the loaded byte is related. *)
@@ -1034,8 +1034,8 @@ Section proof.
           rewrite <- LOADED_WORD_REL.
           unfold word.wrap. repeat f_equal.
 
-          (* simplify Memory.load_bytes. *)
-          unfold Memory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
+          (* simplify TupleMemory.load_bytes. *)
+          unfold TupleMemory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
           do 4 let H := fresh Hget in destruct (map.get f1_data_mem _) eqn: H in Hloaded_word; [|discriminate Hloaded_word].
           rewrite Hget in Hload.
           inversion Hload. inversion Hloaded_word.
@@ -1079,8 +1079,8 @@ Section proof.
         progress fold calculated_w in Hloaded_word.
 
         (* Simplify some hypotheses. *)
-        rewrite Hf1 in Hrun at 1. cbn -[calculated_w Memory.load_bytes Machine.setRegister] in Hrun.
-        destruct (Memory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
+        rewrite Hf1 in Hrun at 1. cbn -[calculated_w TupleMemory.load_bytes Machine.setRegister] in Hrun.
+        destruct (TupleMemory.load_bytes _ f1_data_mem calculated_w) as [loaded|] eqn: Hload in Hrun. 2: { discriminate Hrun. }
         progress cbn -[Machine.setRegister] in Hrun.
 
         (* show that the loaded half-byte is related. *)
@@ -1094,8 +1094,8 @@ Section proof.
           rewrite <- LOADED_WORD_REL.
           unfold word.wrap. repeat f_equal.
 
-          (* simplify Memory.load_bytes. *)
-          unfold Memory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
+          (* simplify TupleMemory.load_bytes. *)
+          unfold TupleMemory.load_bytes, map.getmany_of_tuple in *. cbn -[calculated_w] in Hloaded_word, Hload.
           do 4 let H := fresh Hget in destruct (map.get f1_data_mem _) eqn: H in Hloaded_word; [|discriminate Hloaded_word].
           rewrite Hget, Hget0 in Hload.
           inversion Hload. inversion Hloaded_word.
@@ -1354,9 +1354,9 @@ Section proof.
 
         (* Simplify some hypotheses. *)
         rewrite Hf1 in Hrun at 1. cbn in Hrun.
-        destruct (Memory.store_bytes 1 f1_data_mem _) as [f2_data_mem|] eqn: Hstore in Hrun. 2: { discriminate Hrun. }
-        unfold Memory.store_bytes in Hstore. destruct (Memory.load_bytes 1 _ _) in Hstore; [|discriminate Hstore].
-        unfold Memory.unchecked_store_bytes, map.putmany_of_tuple, LittleEndian.split_deprecated in Hstore. cbn in Hstore.
+        destruct (TupleMemory.store_bytes 1 f1_data_mem _) as [f2_data_mem|] eqn: Hstore in Hrun. 2: { discriminate Hrun. }
+        unfold TupleMemory.store_bytes in Hstore. destruct (TupleMemory.load_bytes 1 _ _) in Hstore; [|discriminate Hstore].
+        unfold TupleMemory.unchecked_store_bytes, map.putmany_of_tuple, LittleEndian.split_deprecated in Hstore. cbn in Hstore.
         injection Hstore as <-.
 
         progress change (BitOps.bitSlice 0 0 2) with 0 in Hsf2.
@@ -1382,13 +1382,13 @@ Section proof.
 
           destruct (Z.eq_dec ind store_ind) as [-> | NEQ].
           * assert (w = store_addr_w) as ->. { eapply word.unsigned_inj. lia. }
-            unfold Memory.load_bytes, map.getmany_of_tuple in Hprev_tup. cbn in Hprev_tup.
+            unfold TupleMemory.load_bytes, map.getmany_of_tuple in Hprev_tup. cbn in Hprev_tup.
             do 4 (destruct (map.get _ _) as [?b|] eqn: ?Hb in Hprev_tup; [|discriminate Hprev_tup]).
             eexists.
             (* exists {| pair._1 := byte_1_b; pair._2 := {| pair._1 := b0; pair._2 := {| pair._1 := b1; pair._2 := {| pair._1 := b2; pair._2 := tt |} |} |} |}. *)
             split.
             { (* The word in store_addr_w is same as previous except for that the lowest byte is set to byte_1_b. *)
-              unfold Memory.load_bytes, map.getmany_of_tuple. cbn.
+              unfold TupleMemory.load_bytes, map.getmany_of_tuple. cbn.
               rewrite map.get_put_same.
               do 3 (rewrite map.get_put_diff; [|
                 intros Heq; apply f_equal with (f := fun x => word.unsigned x mod 4) in Heq;
@@ -1427,7 +1427,7 @@ Section proof.
               cbn. rewrite Z.mod_small by lia. reflexivity.
             }
           * exists prev_tup. split.
-            { unfold Memory.load_bytes, map.getmany_of_tuple. cbn.
+            { unfold TupleMemory.load_bytes, map.getmany_of_tuple. cbn.
               rewrite 4!map.get_put_diff by
                 (* By NEQ *) (intros ->; lia) ||
                 (* By comparing mod4 results *)
@@ -1456,9 +1456,9 @@ Section proof.
 
         (* Simplify some hypotheses. *)
         rewrite Hf1 in Hrun at 1. cbn in Hrun.
-        destruct (Memory.store_bytes 2 f1_data_mem _) as [f2_data_mem|] eqn: Hstore in Hrun. 2: { discriminate Hrun. }
-        unfold Memory.store_bytes in Hstore. destruct (Memory.load_bytes 2 _ _) in Hstore; [|discriminate Hstore].
-        unfold Memory.unchecked_store_bytes, map.putmany_of_tuple, LittleEndian.split_deprecated in Hstore. cbn in Hstore.
+        destruct (TupleMemory.store_bytes 2 f1_data_mem _) as [f2_data_mem|] eqn: Hstore in Hrun. 2: { discriminate Hrun. }
+        unfold TupleMemory.store_bytes in Hstore. destruct (TupleMemory.load_bytes 2 _ _) in Hstore; [|discriminate Hstore].
+        unfold TupleMemory.unchecked_store_bytes, map.putmany_of_tuple, LittleEndian.split_deprecated in Hstore. cbn in Hstore.
         injection Hstore as <-.
 
         progress change (BitOps.bitSlice 1 0 2) with 1 in Hsf2.
@@ -1480,12 +1480,12 @@ Section proof.
 
           destruct (Z.eq_dec ind store_ind) as [-> | NEQ].
           * assert (w = store_addr_w) as ->. { eapply word.unsigned_inj. lia. }
-            unfold Memory.load_bytes, map.getmany_of_tuple in Hprev_tup. cbn in Hprev_tup.
+            unfold TupleMemory.load_bytes, map.getmany_of_tuple in Hprev_tup. cbn in Hprev_tup.
             do 4 (destruct (map.get _ _) as [?b|] eqn: ?Hb in Hprev_tup; [|discriminate Hprev_tup]).
             eexists.
             split.
             { (* The word in store_addr_w is same as previous except for that the lower two bytes. *)
-              unfold Memory.load_bytes, map.getmany_of_tuple. cbn.
+              unfold TupleMemory.load_bytes, map.getmany_of_tuple. cbn.
               1: rewrite map.get_put_same, map.get_put_diff, map.get_put_same, !map.get_put_diff.
               2-6: intros Heq; apply f_equal with (f := fun x => word.unsigned x mod 4) in Heq;
               rewrite !word.unsigned_add, Hw_ind, word.unsigned_of_Z, Z.mul_comm with (m := store_ind), ?Zdiv.Z_mod_mult in Heq; unfold word.wrap in Heq;
@@ -1544,7 +1544,7 @@ Section proof.
               rewrite Zdiv.Zdiv_small by lia. rewrite Z.mod_small by lia. lia.
             }
           * exists prev_tup. split.
-            { unfold Memory.load_bytes, map.getmany_of_tuple. cbn.
+            { unfold TupleMemory.load_bytes, map.getmany_of_tuple. cbn.
 
               rewrite !map.get_put_diff.
               9: { (* w = store_addr_w. by NEQ *)intros ->. lia. }
@@ -1580,9 +1580,9 @@ Section proof.
 
         (* Simplify some hypotheses. *)
         rewrite Hf1 in Hrun at 1. cbn in Hrun.
-        destruct (Memory.store_bytes 4 f1_data_mem _) as [f2_data_mem|] eqn: Hstore in Hrun. 2: { discriminate Hrun. }
-        unfold Memory.store_bytes in Hstore. destruct (Memory.load_bytes 4 _ _) in Hstore; [|discriminate Hstore].
-        unfold Memory.unchecked_store_bytes, map.putmany_of_tuple, LittleEndian.split_deprecated in Hstore. cbn in Hstore.
+        destruct (TupleMemory.store_bytes 4 f1_data_mem _) as [f2_data_mem|] eqn: Hstore in Hrun. 2: { discriminate Hrun. }
+        unfold TupleMemory.store_bytes in Hstore. destruct (TupleMemory.load_bytes 4 _ _) in Hstore; [|discriminate Hstore].
+        unfold TupleMemory.unchecked_store_bytes, map.putmany_of_tuple, LittleEndian.split_deprecated in Hstore. cbn in Hstore.
         injection Hstore as <-.
 
         progress change (BitOps.bitSlice 2 0 2) with 2 in Hsf2.
@@ -1601,12 +1601,12 @@ Section proof.
 
           destruct (Z.eq_dec ind store_ind) as [-> | NEQ].
           * assert (w = store_addr_w) as ->. { eapply word.unsigned_inj. lia. }
-            unfold Memory.load_bytes, map.getmany_of_tuple in Hprev_tup. cbn in Hprev_tup.
+            unfold TupleMemory.load_bytes, map.getmany_of_tuple in Hprev_tup. cbn in Hprev_tup.
             do 4 (destruct (map.get _ _) as [?b|] eqn: ?Hb in Hprev_tup; [|discriminate Hprev_tup]).
             eexists.
             split.
             {
-              unfold Memory.load_bytes, map.getmany_of_tuple. cbn.
+              unfold TupleMemory.load_bytes, map.getmany_of_tuple. cbn.
               repeat (rewrite map.get_put_same || rewrite map.get_put_diff).
               2-7: intros Heq; apply f_equal with (f := fun x => word.unsigned x mod 4) in Heq;
               rewrite !word.unsigned_add, Hw_ind, word.unsigned_of_Z, Z.mul_comm with (m := store_ind), ?Zdiv.Z_mod_mult in Heq; unfold word.wrap in Heq;
@@ -1638,7 +1638,7 @@ Section proof.
               lia.
             }
           * exists prev_tup. split.
-            { unfold Memory.load_bytes, map.getmany_of_tuple. cbn.
+            { unfold TupleMemory.load_bytes, map.getmany_of_tuple. cbn.
 
               rewrite !map.get_put_diff.
               17: { (* w = store_addr_w. by NEQ *)intros ->. lia. }

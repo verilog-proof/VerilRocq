@@ -200,14 +200,14 @@ paco2 has 'fixed' semantics -> needs fixed semantics to do pcofix
     destruct (state_sort st0) eqn:SRT.
     - eapply sim_indC_angelic_src; ss; clarify. i. esplits; et.
       mclo. eapply sim_indC_angelic_tgt; ss; clarify.
-      + rewrite unfold_decompile_STS. rewrite SRT. ss.
+      + try rewrite unfold_decompile_STS. rewrite SRT. ss.
       + i.
         set (cont:= (fun st1 : {st' | step st0 None st'} => decompile_STS step state_sort (st1 $))).
         exists (cont (exist (fun st => step st0 None st) st_src1 STEP)). eexists.
-        { rewrite unfold_decompile_STS. rewrite SRT. econs 3. }
+        { try rewrite unfold_decompile_STS. rewrite SRT. econs 3. }
         esplits; et. mbase.
     - eapply sim_indC_demonic_tgt; ss; clarify.
-      + rewrite unfold_decompile_STS. rewrite SRT. ss.
+      + try rewrite unfold_decompile_STS. rewrite SRT. ss.
       + i. rewrite unfold_decompile_STS in STEP. rewrite SRT in STEP.
         dependent destruction STEP.
         destruct x. rename x into st1.
@@ -215,11 +215,11 @@ paco2 has 'fixed' semantics -> needs fixed semantics to do pcofix
         exists st1. eexists; auto.
         esplits; et. mbase.
     - eapply sim_indC_fin; eauto.
-      ss. rewrite unfold_decompile_STS. rewrite SRT.
+      ss. try rewrite unfold_decompile_STS. rewrite SRT.
       unfold ModSemL.state_sort. ss.
       erewrite wf_finalize; et.
     - eapply sim_indC_demonic_tgt; ss; clarify.
-      + rewrite unfold_decompile_STS. rewrite SRT. ss.
+      + try rewrite unfold_decompile_STS. rewrite SRT. ss.
       + i. rewrite unfold_decompile_STS in STEP. rewrite SRT in STEP.
         rewrite bind_trigger in STEP.
         dependent destruction STEP.
@@ -273,21 +273,21 @@ paco2 has 'fixed' semantics -> needs fixed semantics to do pcofix
     gcofix CIH. i. mclo2.
     destruct (state_sort st0) eqn:SRT.
     - eapply sim_indC_angelic_src; ss; clarify.
-      + rewrite unfold_decompile_STS. rewrite SRT. ss.
+      + try rewrite unfold_decompile_STS. rewrite SRT. ss.
       + i. rewrite unfold_decompile_STS in STEP. rewrite SRT in STEP.
         dependent destruction STEP. destruct x.
         esplits; et. mclo2. eapply sim_indC_angelic_tgt; ss; clarify.
         exists x. exists s. esplits; et. mbase2.
     - eapply sim_indC_demonic_tgt; ss; clarify. i.
       esplits; et. mclo2. eapply sim_indC_demonic_src; ss; clarify.
-      + rewrite unfold_decompile_STS. rewrite SRT. ss.
+      + try rewrite unfold_decompile_STS. rewrite SRT. ss.
       + i. exists (decompile_STS step state_sort st_tgt1).
         eexists.
         { rewrite unfold_decompile_STS in *. rewrite SRT in *.
           apply (ModSemL.step_choose (fun st1 : {st' | step st0 None st'} => decompile_STS step state_sort (st1 $)) (exist _ st_tgt1 STEP)). }
         esplits; et. mbase2.
     - econs; ss.
-      + rewrite unfold_decompile_STS. rewrite SRT.
+      + try rewrite unfold_decompile_STS. rewrite SRT.
         unfold ModSemL.state_sort. ss.
         erewrite wf_finalize; et.
       + auto.
@@ -298,11 +298,11 @@ paco2 has 'fixed' semantics -> needs fixed semantics to do pcofix
       + eapply sim_indC_vis_stuck_tgt; eauto.
       + destruct H.
         eapply sim_indC_demonic_src; ss; clarify.
-        { rewrite unfold_decompile_STS. rewrite SRT. ss. }
+        { try rewrite unfold_decompile_STS. rewrite SRT. ss. }
         des.
         destruct x.
         * esplits.
-          { rewrite unfold_decompile_STS. rewrite SRT. ss. rewrite bind_trigger. unshelve eapply (ModSemL.step_choose _); et. }
+          { try rewrite unfold_decompile_STS. rewrite SRT. ss. rewrite bind_trigger. unshelve eapply (ModSemL.step_choose _); et. }
           mclo2.
           eapply sim_indC_vis; eauto.
           i. ss.
@@ -321,7 +321,7 @@ paco2 has 'fixed' semantics -> needs fixed semantics to do pcofix
           ss.
           mbase2.
         * esplits.
-          { rewrite unfold_decompile_STS. rewrite SRT. ss. rewrite bind_trigger. unshelve eapply (ModSemL.step_choose _); et. }
+          { try rewrite unfold_decompile_STS. rewrite SRT. ss. rewrite bind_trigger. unshelve eapply (ModSemL.step_choose _); et. }
           mclo2.
           eapply sim_indC_vis; eauto.
           i. ss.

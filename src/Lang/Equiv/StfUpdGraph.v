@@ -3,7 +3,7 @@ Require Import Coq.ZArith.BinInt.
 Require Import Lib.Lib. Import HMapNotations. Import SZNotations.
 Require Import Lang.Syntax Lang.Analysis Lang.Semantics. Include SFMonadNotations.
 
-Require Import UpdGraph Standard ProcUpdGraph TrsProc.
+Require Import UpdGraph Standard ProcUpdGraph TrsProc RankedGraph.
 
 Set Implicit Arguments.
 
@@ -65,7 +65,7 @@ Section Equivalence.
       forall ug1 un ug2,
         UGraphUnique (ug1 ++ un :: ug2) ->
         UGraphSt ifw (ug1 ++ un :: ug2) ->
-        UNodeProc decls funcs mtrss un proc ->
+        UNodeCompute decls funcs mtrss un proc ->
         UGraphSt (hmergeR ifw uifw)
           (ug1 ++ {| keys := keys un;
                     deps := deps un;
@@ -74,7 +74,7 @@ Section Equivalence.
                     updf := updf un |} :: ug2) /\
           HMapStrEmptyWf (hmergeR ifw uifw).
   Proof using .
-    unfold UNodeProc; intros; dest.
+    unfold UNodeCompute; intros; dest.
     apply Forall_app in H5; dest; inv H10.
     assert (uifw = updf un ifw) by (rewrite H9, H3; reflexivity); subst uifw.
     pose proof (UNodeKeysOk_HMapStrEmpty H6 ifw) as Huifw.
@@ -155,7 +155,7 @@ Section Equivalence.
   Qed.
 
   Lemma trsProc_UGraphSt_upd:
-    forall proc (Hproc: ProcWf decls funcs mtrss proc)
+    forall proc (Hproc: ProcSourceWf decls funcs mtrss proc)
            ifw uifw nflops,
       trsProc decls funcs mtrss proc ifw = Sret (uifw, nflops) ->
       forall ug,
@@ -164,12 +164,12 @@ Section Equivalence.
         UGraphSt ifw ug ->
         forall un,
           In un ug ->
-          UNodeProc decls funcs mtrss un proc ->
+          UNodeCompute decls funcs mtrss un proc ->
           getDepsUpdDone ug (deps un) = true /\
             (deps un = []%list \/ getDepsUpdOnce ug (deps un) = true).
   Proof using .
     intros.
-    destruct Hproc as [_ [Hproc _]]; specialize (Hproc ifw).
+    destruct Hproc as [_ Hproc]; specialize (Hproc ifw).
     rewrite H3 in Hproc; destruct Hproc as [Huifwe Hproc].
     simpl in Huifwe.
 
@@ -177,7 +177,7 @@ Section Equivalence.
     eapply Forall_In in H5; [|eassumption].
     red in H5.
 
-    (* reducing [UNodeProc] *)
+    (* reducing [UNodeCompute] *)
     red in H8; dest.
     rewrite <-H10 in Hproc.
     clear H8 H9 H10.
@@ -213,22 +213,22 @@ Section Equivalence.
   Qed.
 
   Section WithBase.
-    Variable (stb: State).
+    Let stb: State := HMapEmpty.
 
     Lemma trsProc_imp_EvalUGraphTrs:
-      forall proc gprocs (Hgprocs: Forall (ProcWf decls funcs mtrss) gprocs),
+      forall proc gprocs,
         In proc gprocs ->
         forall ifw (Hifw: HMapStrEmptyWf ifw) uifw nflops,
           trsProc decls funcs mtrss proc ifw = Sret (uifw, nflops) ->
           forall ug (Hupdf: UpdfSub ug ifw),
             UGraphDepsOk ug ->
             UGraphUnique ug ->
-            UGraphProcs decls funcs mtrss ug gprocs ->
+            UGraphSource decls funcs mtrss ug gprocs ->
             UGraphSt ifw ug ->
             exists nug, EvalUGraphTrs ug (hupds stb ifw) nug (hupds stb (hmergeR ifw uifw)) /\
                           UGraphDepsOk nug /\
                           UGraphUnique nug /\
-                          UGraphProcs decls funcs mtrss nug gprocs /\
+                          UGraphSource decls funcs mtrss nug gprocs /\
                           UGraphSt (hmergeR ifw uifw) nug /\
                           HMapStrEmptyWf (hmergeR ifw uifw).
     Proof using .
@@ -237,6 +237,11 @@ Section Equivalence.
       pose proof H7 as Hup.
       apply Forall2_app_inv_r in H7; destruct H7 as [ug1 [ug2 [? [? ?]]]].
       destruct ug2 as [|un ug2]; inv H7.
+      destruct H13 as [[H13 Hprocwf] | [Honce [Hdone Hempty]]].
+      2: { specialize (Hempty ifw (uifw, nflops) H4); simpl in Hempty.
+           subst uifw; rewrite hmergeR_empty.
+           exists (ug1 ++ un :: ug2); split; [apply EvalUGraphId|].
+           repeat split; assumption. }
       destruct (updDone un) eqn:Huu.
 
       - assert (hmergeR ifw uifw = ifw) as Hnupd.
@@ -259,7 +264,7 @@ Section Equivalence.
         rewrite Hnupd.
         eexists; repeat split; [apply EvalUGraphId; fail|..]; assumption.
 
-      - rewrite Forall_app in Hgprocs; destruct Hgprocs as [Hprocs1 Hprocs2]; inv Hprocs2.
+      - pose proof Hprocwf as H10.
         exists (ug1 ++ {| keys := keys un;
                          deps := deps un;
                          updOnce := true;
@@ -279,38 +284,30 @@ Section Equivalence.
           * assumption.
           * rewrite Hud; reflexivity.
           * assert (updf un (hupds stb ifw) = uifw /\ HMapStrEmpty uifw) as Hupdb.
-            { red in H13; dest.
-              apply UNodeKeysOk_HMapStrEmpty with (st:= (hupds stb ifw)) in H7.
-              rewrite H13 in *.
-              red in H10; dest.
-              rewrite H17 in *; [|eassumption..].
-              split; [reflexivity|assumption].
-            }
+            { destruct H13 as [Hkeys [_ [_ Heval]]].
+              assert (Heq: updf un ifw = uifw) by (rewrite Heval, H4; reflexivity).
+              split; [exact Heq|].
+              rewrite <-Heq; apply UNodeKeysOk_HMapStrEmpty; exact Hkeys. }
 
             destruct Hupdb.
             rewrite H7.
             apply hupds_hmergeR_assoc.
             { apply HMapStrEmptyWf_HMapStrEmpty; assumption. }
             { assumption. }
-            { apply Forall_app in H8; dest; inv H12.
-              red in H17.
-              red in H13; dest.
-              specialize (H13 (hupds stb ifw)).
-              destruct H13.
-              { rewrite H13 in *.
-                red; intros.
-                destruct ifw; auto.
-              }
-              { destruct H13 as [uvs [? ?]].
-                rewrite H13 in *; rewrite H20 in *.
-                red; intros.
-                destruct ifw; try (exfalso; auto; fail); auto.
-                intros.
-                specialize (H14 Huu _ H22).
-                simpl in H14.
-                eapply haccessV_Some with (vs:= str) (k:= v); [assumption|].
-                destruct (haccessV str v); [discriminate|assumption].
-              }
+            { assert (Habsent: forall v, In v (keys un) -> hfind [HEltVid v] ifw = None).
+              { unfold UGraphSt in H8; rewrite Forall_forall in H8.
+                specialize (H8 un ltac:(apply in_or_app; right; left; reflexivity)).
+                exact (proj2 (proj2 H8) Huu). }
+              destruct H13 as [Hkeys _]. specialize (Hkeys ifw).
+              change (updf un ifw = uifw) in H7; rewrite H7 in Hkeys.
+              destruct Hkeys as [Heq | [bindings [Heq Hkeys]]]; subst uifw.
+              - destruct ifw; exact I.
+              - destruct ifw; try exact I.
+                intros v HinOld HinNew.
+                rewrite <-Hkeys in HinNew.
+                specialize (Habsent v HinNew).
+                apply haccessV_Some in HinOld; simpl in Habsent.
+                destruct (haccessV str v); [discriminate|contradiction].
             }
 
         + (* [UGraphDepsOk] *)
@@ -321,8 +318,8 @@ Section Equivalence.
           eapply UGraphUnique_keys_equiv; [eassumption|].
           rewrite !map_app; simpl; f_equal.
 
-        + (* [UGraphProcs] *)
-          apply UGraphProcs_upd; assumption.
+        + (* [UGraphSource] *)
+          apply UGraphSource_upd; assumption.
 
         + (* [UGraphSt] *)
           eapply UGraphSt_upd; try eassumption.
@@ -331,67 +328,55 @@ Section Equivalence.
           all: apply H10.
     Qed.
 
-    Hypothesis (Hstb: UGraphBaseMono stb).
-
     Lemma trsProcs_imp_EvalUGraphTrs_ind:
-      forall gprocs (Hgprocs: Forall (ProcWf decls funcs mtrss) gprocs) procs
-             (Hpr: exists rprocs, gprocs = rprocs ++ procs)
-             ifw (Hifw: HMapStrEmptyWf ifw)
-             nifw flops nflops,
+      forall (P: State -> Prop) gprocs procs,
+        (exists prefix, gprocs = prefix ++ procs) ->
+        forall ifw, HMapStrEmptyWf ifw ->
+        forall nifw flops nflops,
         trsProcs decls funcs mtrss procs (ifw, flops) = Sret (nifw, nflops) ->
-        forall ug (Hupdf: UpdfSub ug ifw)
-               (Hugk: UGraphKeysOk ug)
-               (Hugu: UGraphUpdfOk ug),
-          UGraphDepsOk ug ->
-          UGraphUnique ug ->
-          UGraphProcs decls funcs mtrss ug gprocs ->
-          UGraphSt ifw ug ->
-          exists nug, EvalUGraphTrs ug (hupds stb ifw) nug (hupds stb nifw) /\
-                        UGraphDepsOk nug /\
-                        UGraphUnique nug /\
-                        UGraphProcs decls funcs mtrss nug gprocs /\
-                        UGraphSt nifw nug /\
-                        HMapStrEmptyWf nifw.
-    Proof using All.
-      induction procs as [|hproc tprocs]; simpl; intros.
-      - inv H3.
-        exists ug; repeat split; [|eassumption..].
-        constructor.
-      - assert (exists rprocs, gprocs = rprocs ++ tprocs) as Hri.
-        { destruct Hpr as [rprocs ?]; subst gprocs.
-          exists (rprocs ++ [hproc]).
-          rewrite <-List.app_assoc; reflexivity.
-        }
-        specialize (IHtprocs Hri); clear Hri.
-        destruct (trsProc decls funcs mtrss hproc ifw) as [[uifw uflops]|] eqn:Hproc;
-          unfold iffupds in *; simpl in *.
-        + eapply trsProc_imp_EvalUGraphTrs with (gprocs:= gprocs) in Hproc; try eassumption.
-          * destruct Hproc as [uug [? [? [? [? [? ?]]]]]].
-            assert (UpdfSub uug (hmergeR ifw uifw)) as Hupdfu.
-            { eapply EvalUGraphTrs_UpdfSub; [..|eassumption|].
-              all: try assumption.
-              apply Hstb; assumption.
-            }
-            assert (UGraphKeysOk uug) as Hugku by (eapply EvalUGraphTrs_UGraphKeysOk; eassumption).
-            assert (UGraphUpdfOk uug) as Huguu by (eapply EvalUGraphTrs_UGraphUpdfOk; eassumption).
-            specialize (IHtprocs _ H13 _ _ _ H3 _ Hupdfu Hugku Huguu H9 H10 H11 H12).
-            destruct IHtprocs as [nug [? [? [? [? [? ?]]]]]].
-            exists nug; repeat split; [|assumption..].
-            eapply EvalUGraphTrs_trs; eassumption.
-          * dest; subst gprocs; apply in_or_app; right; left; reflexivity.
-        + rewrite !hmergeR_empty in H3.
-          eapply IHtprocs; eassumption.
+        forall ug, P ifw -> UpdfSub ug ifw -> UGraphKeysOk ug ->
+        GraphDomain ug P -> UGraphDepsOk ug -> UGraphUnique ug ->
+        UGraphSource decls funcs mtrss ug gprocs -> UGraphSt ifw ug ->
+        exists nug, EvalUGraphTrs ug ifw nug nifw /\
+          UGraphDepsOk nug /\ UGraphUnique nug /\
+          UGraphSource decls funcs mtrss nug gprocs /\ UGraphSt nifw nug /\
+          HMapStrEmptyWf nifw.
+    Proof.
+      intros P gprocs procs; induction procs as [|proc rest IH];
+        intros Hprefix ifw Hifw nifw flops nflops Hrun ug HP Hsub Hkeys
+          Hdomain Hdeps Hunique Hsource Hstate.
+      - simpl in Hrun; inversion Hrun; subst.
+        exists ug; split; [constructor|repeat split; assumption].
+      - assert (Htail: exists prefix, gprocs = prefix ++ rest).
+        { destruct Hprefix as [prefix Hprefix]; subst gprocs.
+          exists (prefix ++ [proc]); rewrite <-app_assoc; reflexivity. }
+        assert (Hin: In proc gprocs).
+        { destruct Hprefix as [prefix Hprefix]; subst gprocs.
+          apply in_or_app; right; left; reflexivity. }
+        simpl in Hrun.
+        destruct (trsProc decls funcs mtrss proc ifw) as [[uifw uflops]|err] eqn:Hproc;
+          unfold iffupds in Hrun; simpl in Hrun.
+        + destruct (trsProc_imp_EvalUGraphTrs proc Hin Hifw Hproc Hsub Hdeps Hunique
+            Hsource Hstate) as [next [Hstep [Hdn [Hun [Hsn [Hstn Hifwn]]]]]].
+          change (EvalUGraphTrs ug ifw next (hmergeR ifw uifw)) in Hstep.
+          destruct (graph_domain_trace Hdomain Hstep (SameGraph_refl ug)
+            Hunique Hkeys HP Hsub) as [HPn Hsubn].
+          assert (Hkn: UGraphKeysOk next) by (eapply EvalUGraphTrs_UGraphKeysOk; eassumption).
+          assert (Hdomainn: GraphDomain next P).
+          { eapply SameGraph_domain; [eapply EvalUGraphTrs_same; exact Hstep|exact Hdomain]. }
+          destruct (IH Htail _ Hifwn _ _ _ Hrun next HPn Hsubn Hkn Hdomainn
+            Hdn Hun Hsn Hstn) as [final [Hrest Hfinal]].
+          exists final; split; [eapply EvalUGraphTrs_trs; eassumption|exact Hfinal].
+        + rewrite !hmergeR_empty in Hrun.
+          eapply IH; eassumption.
     Qed.
 
   End WithBase.
 
   Section WithProcs.
-    Variable ips: IPS.
+    Variables (procs: Processes) (initialGraph: ugraph) (initialState: State).
 
-    Local Notation procs := (List.map snd ips).
-
-    Hypotheses (HprocsW: Forall (ProcWf decls funcs mtrss) procs)
-      (HprocsU: ProcsWfUpd decls funcs mtrss procs)
+    Hypotheses (HprocsU: ProcsWfUpd decls funcs mtrss procs)
       (HprocsD: ProcsWfDet decls funcs mtrss procs).
 
     Definition UNodeUpdComplFull (ug: ugraph) (un: unode) :=
@@ -404,7 +389,7 @@ Section Equivalence.
       forall stf (Hstf: HMapStrEmptyWf stf) flops nflops,
         trsProcs decls funcs mtrss procs (stf, flops) = Sret (stf, nflops) ->
         forall ugf,
-          UGraphProcs decls funcs mtrss ugf procs ->
+          UGraphSource decls funcs mtrss ugf procs ->
           UGraphSt stf ugf ->
           UGraphUpdComplFull ugf.
     Proof using All.
@@ -428,12 +413,11 @@ Section Equivalence.
       eapply Forall2_In_left in H4; [|eassumption].
       destruct H4 as [proc [? ?]].
       eapply trsProcs_fp_ind in H3; [|eassumption..].
+      destruct H9 as [[H9 [Huniq Hsucc]] | [_ [Hdone _]]]; [|congruence].
       red in H9; dest.
       specialize (H12 stf).
       specialize (H9 stf).
-      eapply Forall_In in HprocsW; [|eassumption].
-      destruct HprocsW as [_ [? _]].
-      specialize (H13 stf).
+      specialize (Hsucc stf); rename Hsucc into H13.
 
       destruct (trsProc decls funcs mtrss proc stf) as [[pifw pflops]|] eqn:Hp.
       - simpl in H12; subst pifw.
@@ -473,50 +457,61 @@ Section Equivalence.
         elim H18; assumption.
     Qed.
 
-    Lemma TrsProcsRep_imp_EvalUGraphTrs_ind:
-      forall inits (Hinits: HMapStrEmptyWf inits) stf flops,
+    Lemma TrsProcsRep_graph_result:
+      forall (P: State -> Prop) inits stf flops,
         TrsProcsRep decls funcs mtrss procs inits stf flops ->
-        forall iug,
-          UpdfSub iug inits ->
-          UGraphKeysOk iug ->
-          UGraphUpdfOk iug ->
-          UGraphDepsOk iug ->
-          UGraphUnique iug ->
-          UGraphProcs decls funcs mtrss iug procs ->
-          UGraphSt inits iug ->
-          forall stb (Hstb: UGraphBaseMono stb),
-          exists ugf,
-            EvalUGraphTrs iug (hupds stb inits) ugf (hupds stb stf) /\
-              UGraphUpdComplFull ugf.
-    Proof using All.
-      induction 2; simpl; intros; subst.
-      - eapply trsProcs_imp_EvalUGraphTrs_ind with (gprocs:= procs) in H4; try eassumption.
-        + destruct H4 as [nug [? [? [? [? [? ?]]]]]].
-          assert (UpdfSub nug ifw1) as Hupdfu.
-            { eapply EvalUGraphTrs_UpdfSub; [..|eassumption|].
-              all: try assumption.
-              apply Hstb; assumption.
-            }
-            assert (UGraphKeysOk nug) as Hugku by (eapply EvalUGraphTrs_UGraphKeysOk; eassumption).
-            assert (UGraphUpdfOk nug) as Huguu by (eapply EvalUGraphTrs_UGraphUpdfOk; eassumption).
-          specialize (IHTrsProcsRep H16 _ Hupdfu Hugku Huguu H12 H13 H14 H15 _ Hstb).
-          destruct IHTrsProcsRep as [ugf [? ?]].
-          eexists; split; [|eassumption].
-          eapply EvalUGraphTrs_trs; eassumption.
-        + exists nil; reflexivity.
-      - exists iug; split; [constructor; fail|].
-        eapply fp_UGraphUpdComplFull; eassumption.
+        HMapStrEmptyWf inits -> forall iug,
+        P inits -> UpdfSub iug inits -> UGraphKeysOk iug -> GraphDomain iug P ->
+        UGraphDepsOk iug -> UGraphUnique iug ->
+        UGraphSource decls funcs mtrss iug procs -> UGraphSt inits iug ->
+        exists ugf, EvalUGraphTrs iug inits ugf stf /\ UGraphUpdComplFull ugf /\
+          UGraphSt stf ugf /\ HMapStrEmptyWf stf.
+    Proof.
+      intros P inits stf flops Hrun.
+      induction Hrun as [ifw1 ifwf flops Hrep IH ifw0 flops1 Hstep | ifw flops Hfix];
+        intros Hifw ug HP Hsub Hkeys Hdomain Hdeps Hunique Hsource Hstate.
+      - destruct (trsProcs_imp_EvalUGraphTrs_ind (P := P) (gprocs := procs) procs
+          ltac:(exists nil; reflexivity) Hifw HMapEmpty Hstep HP Hsub Hkeys Hdomain
+          Hdeps Hunique Hsource Hstate)
+          as [next [Htrace [Hdn [Hun [Hsn [Hstn Hifwn]]]]]].
+        destruct (graph_domain_trace Hdomain Htrace (SameGraph_refl ug)
+          Hunique Hkeys HP Hsub) as [HPn Hsubn].
+        assert (Hkn: UGraphKeysOk next) by (eapply EvalUGraphTrs_UGraphKeysOk; eassumption).
+        assert (Hdomainn: GraphDomain next P).
+        { eapply SameGraph_domain; [eapply EvalUGraphTrs_same; exact Htrace|exact Hdomain]. }
+        destruct (IH Hifwn next HPn Hsubn Hkn Hdomainn Hdn Hun Hsn Hstn)
+          as [final [Hrest Hcomplete]].
+        exists final; split; [eapply EvalUGraphTrs_trs; eassumption|exact Hcomplete].
+      - exists ug; split; [constructor|].
+        split; [eapply fp_UGraphUpdComplFull; eassumption|split; assumption].
     Qed.
 
-    Definition ugMInitsU: ugraph := getUGraph decls funcs mtrss true ips.
-    Local Notation initState := (initState ips).
+    Lemma TrsProcsRep_imp_EvalUGraphTrs_ind:
+      forall (P: State -> Prop) inits stf flops,
+        TrsProcsRep decls funcs mtrss procs inits stf flops ->
+        HMapStrEmptyWf inits -> forall iug,
+        P inits -> UpdfSub iug inits -> UGraphKeysOk iug -> GraphDomain iug P ->
+        UGraphDepsOk iug -> UGraphUnique iug ->
+        UGraphSource decls funcs mtrss iug procs -> UGraphSt inits iug ->
+        exists ugf, EvalUGraphTrs iug inits ugf stf /\ UGraphUpdComplFull ugf.
+    Proof.
+      intros P inits stf flops Hrun Hifw ug HP Hsub Hkeys Hdomain Hdeps Hunique Hsource Hstate.
+      destruct (TrsProcsRep_graph_result (P := P) Hrun Hifw HP Hsub Hkeys Hdomain
+        Hdeps Hunique Hsource Hstate) as [final [Htrace [Hcomplete _]]].
+      exists final; split; assumption.
+    Qed.
 
-    (** Initial conditions: all proven statically (syntactically) by the given processes. *)
-    Hypotheses (Huu: UGraphUnique ugMInitsU)
+    Local Notation ugMInitsU := initialGraph.
+    Local Notation initState := initialState.
+
+    (** Conditions for the source's initial graph. *)
+    Variable (P: State -> Prop).
+    Hypotheses (HP: P initState)
+      (Huu: UGraphUnique ugMInitsU)
       (Huk: UGraphKeysOk ugMInitsU)
       (Hud: UGraphDepsOk ugMInitsU)
-      (Huf: UGraphUpdfOk ugMInitsU)
-      (Hup: UGraphProcs decls funcs mtrss ugMInitsU procs)
+      (Huf: GraphDomain ugMInitsU P)
+      (Hup: UGraphSource decls funcs mtrss ugMInitsU procs)
       (Hus: UGraphSt initState ugMInitsU)
       (Hufs: UpdfSub ugMInitsU initState)
       (Hku: HMapStrEmptyWf initState).
@@ -524,12 +519,10 @@ Section Equivalence.
     Theorem TrsProcsRep_imp_EvalUGraphTrs:
       forall stf flops,
         TrsProcsRep decls funcs mtrss procs initState stf flops ->
-        forall stb (Hstb: UGraphBaseMono stb),
-        exists ug2,
-          EvalUGraphTrsFp ugMInitsU (hupds stb initState) ug2 (hupds stb stf).
+        exists ug2, EvalUGraphTrsFp ugMInitsU initState ug2 stf.
     Proof using All.
       intros.
-      eapply TrsProcsRep_imp_EvalUGraphTrs_ind with (stb:= stb) in H3;
+      eapply TrsProcsRep_imp_EvalUGraphTrs_ind with (P := P) in H3;
         try eassumption.
       - destruct H3 as [ugf [? ?]].
         exists ugf; repeat split; try assumption.
@@ -539,50 +532,6 @@ Section Equivalence.
         + apply Forall_forall; intros.
           red in H4; rewrite Forall_forall in H4; specialize (H4 _ H5).
           apply H4.
-    Qed.
-
-    (** Additional conditions to ensure the other direction by confluence *)
-    Variables (stb: State) (vars: list vid_t).
-    Hypotheses (Hstwf: UGraphStWf (hupds stb initState) ugMInitsU)
-      (Hvars: HMapStrKeysWf (hupds stb initState) vars)
-      (Hum: UGraphBaseMono stb)
-      (Hufsb: UpdfSub ugMInitsU (hupds stb initState)).
-
-    Theorem EvalUGraphTrs_imp_TrsProcsRep_rel:
-      forall ug2 stbf,
-        EvalUGraphTrsFp ugMInitsU (hupds stb initState) ug2 (hupds stb stbf) ->
-        forall pstf pflops,
-          TrsProcsRep decls funcs mtrss procs initState pstf pflops ->
-          hupds stb stbf = hupds stb pstf.
-    Proof using All.
-      unfold EvalUGraphTrsFp; intros; dest.
-      simple apply TrsProcsRep_imp_EvalUGraphTrs with (stb:= stb) in H4; [|assumption].
-      destruct H4 as [aug2 [? [? ?]]].
-      eapply eval_ugraph_confl_state_eq_ind
-        with (ug0:= ugMInitsU) (st0:= hupds stb initState)
-             (ug1:= ug2) (ug2:= aug2); try eassumption.
-    Qed.
-
-    Theorem EvalUGraphTrs_imp_TrsProcsRep:
-      forall pstf,
-        hupds stb pstf = pstf ->
-        forall ug2,
-          EvalUGraphTrsFp ugMInitsU initState ug2 pstf ->
-          TrsProcsRepProg decls funcs mtrss procs ->
-          exists tstf tflops,
-            TrsProcsRep decls funcs mtrss procs initState tstf tflops /\
-              hupds stb tstf = pstf.
-    Proof using All.
-      intros.
-      destruct H4 as [? [? ?]].
-      eapply Hum in H4.
-      specialize (H5 initState).
-      destruct H5 as [tstf [pflops ?]].
-      pose proof H5.
-      eapply EvalUGraphTrs_imp_TrsProcsRep_rel with (stbf:= pstf) in H8.
-      - do 2 eexists; split; [eassumption|].
-        congruence.
-      - repeat split; eassumption.
     Qed.
 
   End WithProcs.

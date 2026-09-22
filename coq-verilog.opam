@@ -11,9 +11,8 @@ license: "BSD-3-Clause"
 
 depends: [
   "ocaml" {>= "4.14.0" & < "5.0"}
-  "coq" {= "8.18.0"}
+  "coq" {= "9.0.1"}
   "coq-freesim" {= "1.0.0"}
 ]
 
 build: [make "-j%{jobs}%" ]
- 
