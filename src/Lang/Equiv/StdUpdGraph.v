@@ -536,10 +536,7 @@ Section Equivalence.
       repeat split; [constructor|assumption..].
     - (* Case: EventEval false (NBA) -- exfalso *)
       exfalso.
-      inv H11.
-      apply map_eq_app in H12.
-      destruct H12 as [procs1 [procs2 [? [? ?]]]]; subst.
-      destruct procs2; discriminate.
+      eapply ExecEventRegion_nilR_no_some; eassumption.
   Qed.
 
   Lemma ExecEvents_nba_monotone:
@@ -552,12 +549,8 @@ Section Equivalence.
     subst; specialize (IHExecEvents eq_refl); subst.
     clear -H3.
     inv H3; [reflexivity..|].
-    clear -H6.
-    inv H6.
     exfalso.
-    apply map_eq_app in H1.
-    destruct H1 as [procs1 [procs2 [? [? ?]]]].
-    destruct procs2; discriminate.
+    eapply ExecEventRegion_nilR_no_some; eassumption.
   Qed.
 
   Lemma ExecEvents_imp_EvalUGraphTrs_ind:

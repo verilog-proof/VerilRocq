@@ -25,7 +25,7 @@ Section ProcUpdGraph.
         if isComb
         then getSLStatementWrites decls cpos stmt
         else initWrites
-    | EvalUnitAssign lv e => getSLExpr decls cpos lv
+    | EvalUnitAssign lv e => getSLWriteExpr decls cpos lv
     | EvalUnitModuleIns mins => getWritesModuleIns decls mtrss cpos mins
     | EvalUnitInputClk => initWrites
     end.

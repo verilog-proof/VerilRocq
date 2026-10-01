@@ -174,6 +174,76 @@ Section ModuleEquivalence.
     exists s,f; exact Hrun.
   Qed.
 
+  (** At a source fixed point each process preserves the active state.
+      This follows from its graph equations and unique output keys. *)
+  Lemma module_process_settled: forall mprocs VI VF (M: ModuleWf mprocs VI VF)
+    ins flops s, VI ins -> VF flops -> StateOf decls funcs mtrss mprocs ins flops s ->
+    forall proc, In proc (procs mprocs) -> forall active nba,
+      trsProc decls funcs mtrss proc s = Sret (active,nba) ->
+      hmergeR s active = s.
+  Proof.
+    intros mprocs VI VF M ins flops s Hi Hf [computed Hrun] proc Hin active nba Heval.
+    pose proof (module_sources M ins flops Hi Hf) as Hsource.
+    destruct (source_result (module_updates M) (module_deterministic M) Hsource Hrun)
+      as [HP [Heq Hpresent]].
+    destruct (Forall2_In_right (source_processes Hsource) proc Hin)
+      as [un [Hun Hlocal]].
+    destruct Hlocal as [[[Hkeys [_ [_ Hfun]]] _]|[_ [_ Hempty]]].
+    - specialize (Hfun s); rewrite Heval in Hfun; simpl in Hfun.
+      destruct (Hkeys s) as [Hempty|[vs [Hvs Hks]]].
+      + rewrite <-Hfun, Hempty; apply hmergeR_empty.
+      + rewrite <-Hfun, Hvs.
+        destruct (module_shape M ins flops Hi Hf s HP) as [schema [Hshape _]].
+        destruct s; try contradiction.
+        destruct Hshape as [<- Huniq]. apply hmergeR_absorbed; [exact Huniq|].
+        intros key Hkey; rewrite <-Hvs; apply Heq; [exact Hun|rewrite Hks; exact Hkey].
+    - specialize (Hempty s (active,nba) Heval); simpl in Hempty.
+      subst active; apply hmergeR_empty.
+  Qed.
+
+  Lemma module_inputs_ready: forall mprocs VI VF (M: ModuleWf mprocs VI VF)
+    ins0 ins1 flops,
+    VI ins0 -> VI ins1 -> VF flops -> forall s,
+    StateOf decls funcs mtrss mprocs ins0 flops s ->
+    InjectionReady decls funcs mtrss mprocs s
+      (ins1 :: map (fun _ => []) mprocs) ins1 flops.
+  Proof.
+    intros mprocs VI VF M ins0 ins1 flops Hi0 Hi1 Hf s Hs.
+    eapply source_injection_ready with
+      (old := module_graph M ins0 flops) (ug := module_graph M ins1 flops)
+      (injected := module_input_mask M ins0 ins1 flops); [| | | | | | | | |exact Hs].
+    - exact (module_updates M).
+    - exact (module_deterministic M).
+    - exact (module_processes M).
+    - apply (module_sources M); assumption.
+    - apply (module_sources M); assumption.
+    - apply (module_standard M); assumption.
+    - apply (module_shape M); assumption.
+    - apply (module_seed_keys M); assumption.
+    - apply (module_input_change M); assumption.
+  Qed.
+
+  Lemma module_flops_ready: forall mprocs VI VF (M: ModuleWf mprocs VI VF)
+    ins flops0 flops1,
+    VI ins -> VF flops0 -> VF flops1 -> forall s,
+    StateOf decls funcs mtrss mprocs ins flops0 s ->
+    InjectionReady decls funcs mtrss mprocs s ([] :: flops1) ins flops1.
+  Proof.
+    intros mprocs VI VF M ins flops0 flops1 Hi Hf0 Hf1 s Hs.
+    eapply source_injection_ready with
+      (old := module_graph M ins flops0) (ug := module_graph M ins flops1)
+      (injected := module_flop_mask M ins flops0 flops1); [| | | | | | | | |exact Hs].
+    - exact (module_updates M).
+    - exact (module_deterministic M).
+    - exact (module_processes M).
+    - apply (module_sources M); assumption.
+    - apply (module_sources M); assumption.
+    - apply (module_standard M); assumption.
+    - apply (module_shape M); assumption.
+    - apply (module_seed_keys M); assumption.
+    - apply (module_flop_change M); assumption.
+  Qed.
+
   Theorem stf_std_equiv_module: forall mprocs VI VF,
     ModuleWf mprocs VI VF -> forall ins0 ins1 flops0 flops1,
     VI ins0 -> VI ins1 -> VF flops0 -> VF flops1 ->
@@ -184,29 +254,7 @@ Section ModuleEquivalence.
   Proof.
     intros mprocs VI VF M ins0 ins1 flops0 flops1 Hi0 Hi1 Hf0 Hf1 st0 Hstart stf.
     eapply stf_std_equiv; [| |exact Hstart].
-    - eapply source_injection_ready with
-        (old := module_graph M ins0 flops0) (ug := module_graph M ins1 flops0)
-        (injected := module_input_mask M ins0 ins1 flops0).
-      + exact (module_updates M).
-      + exact (module_deterministic M).
-      + exact (module_processes M).
-      + apply (module_sources M); assumption.
-      + apply (module_sources M); assumption.
-      + apply (module_standard M); assumption.
-      + apply (module_shape M); assumption.
-      + apply (module_seed_keys M); assumption.
-      + apply (module_input_change M); assumption.
-    - eapply source_injection_ready with
-        (old := module_graph M ins1 flops0) (ug := module_graph M ins1 flops1)
-        (injected := module_flop_mask M ins1 flops0 flops1).
-      + exact (module_updates M).
-      + exact (module_deterministic M).
-      + exact (module_processes M).
-      + apply (module_sources M); assumption.
-      + apply (module_sources M); assumption.
-      + apply (module_standard M); assumption.
-      + apply (module_shape M); assumption.
-      + apply (module_seed_keys M); assumption.
-      + apply (module_flop_change M); assumption.
+    - intros s Hs; exact (@module_inputs_ready mprocs VI VF M ins0 ins1 flops0 Hi0 Hi1 Hf0 s Hs).
+    - intros s Hs; exact (@module_flops_ready mprocs VI VF M ins1 flops0 flops1 Hi1 Hf0 Hf1 s Hs).
   Qed.
 End ModuleEquivalence.

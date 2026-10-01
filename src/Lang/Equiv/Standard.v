@@ -73,10 +73,10 @@ Section Standard.
                          | Fail _ => nil
                          end
         | VExprHier pe ce => getSLExpr pe
-        | VExprPriSelect se ie => getSLExpr se
-        | VExprPriSelectConstRange se le re => getSLExpr se
-        | VExprPriSelectIdxRangeAdd se le re => getSLExpr se
-        | VExprPriSelectIdxRangeSub se le re => getSLExpr se
+        | VExprPriSelect se ie => getSLExpr se ++ getSLExpr ie
+        | VExprPriSelectConstRange se le re => getSLExpr se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeAdd se le re => getSLExpr se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeSub se le re => getSLExpr se ++ getSLExpr le ++ getSLExpr re
         | VExprPriConcat es => list_map getSLExpr es
         | VExprPriMultConcat ne ces => (getSLExpr ne) ++ (list_map getSLExpr ces)
         | VExprTfCall tfid aes => list_map getSLExpr aes
@@ -87,6 +87,30 @@ Section Standard.
         | VExprBinOp op le re => (getSLExpr le) ++ (getSLExpr re)
         | VExprCond ce te fe => (getSLExpr ce) ++ (getSLExpr te) ++ (getSLExpr fe)
         | VExprInside ie res => (getSLExpr ie) ++ (list_map getSLExpr res)
+        end.
+
+      (** An lvalue writes its base and reads its index expressions. *)
+      Fixpoint getSLWriteExpr (e: @VExpr vid_t): list stvu :=
+        match e with
+        | VExprId vid => getSLExpr (VExprId vid)
+        | VExprHier pe _ => getSLWriteExpr pe
+        | VExprPriSelect se _ => getSLWriteExpr se
+        | VExprPriSelectConstRange se _ _ => getSLWriteExpr se
+        | VExprPriSelectIdxRangeAdd se _ _ => getSLWriteExpr se
+        | VExprPriSelectIdxRangeSub se _ _ => getSLWriteExpr se
+        | VExprPriConcat es => list_map getSLWriteExpr es
+        | _ => nil
+        end.
+
+      Fixpoint getSLLvalueReads (e: @VExpr vid_t): list stvu :=
+        match e with
+        | VExprHier pe _ => getSLLvalueReads pe
+        | VExprPriSelect se ie => getSLLvalueReads se ++ getSLExpr ie
+        | VExprPriSelectConstRange se le re => getSLLvalueReads se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeAdd se le re => getSLLvalueReads se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriSelectIdxRangeSub se le re => getSLLvalueReads se ++ getSLExpr le ++ getSLExpr re
+        | VExprPriConcat es => list_map getSLLvalueReads es
+        | _ => nil
         end.
 
       (** Standard 9.2.2.2.1 Implicit always_comb sensitivities *)
@@ -122,8 +146,8 @@ Section Standard.
 
       Fixpoint getSLStatementReads (sti: @VStatementItem vid_t): list stvu :=
         match sti with
-        | VStatementItemBlockingAssignNormal lv e => getSLExpr e
-        | VStatementItemNonblockingAssign lv e => getSLExpr e
+        | VStatementItemBlockingAssignNormal lv e => getSLLvalueReads lv ++ getSLExpr e
+        | VStatementItemNonblockingAssign lv e => getSLLvalueReads lv ++ getSLExpr e
         | VStatementCase cty ce css =>
             (getSLExpr ce)
               ++ (getSLStatementCase true getSLExpr getSLStatementReads css)
@@ -145,8 +169,8 @@ Section Standard.
 
       Fixpoint getSLStatementWrites (sti: @VStatementItem vid_t): list stvu :=
         match sti with
-        | VStatementItemBlockingAssignNormal lv e => getSLExpr lv
-        | VStatementItemNonblockingAssign lv e => getSLExpr lv
+        | VStatementItemBlockingAssignNormal lv e => getSLWriteExpr lv
+        | VStatementItemNonblockingAssign lv e => getSLWriteExpr lv
         | VStatementCase cty ce css =>
             getSLStatementCase false getSLExpr getSLStatementWrites css
         | VStatementCond ce tsti ofsti =>
@@ -165,7 +189,7 @@ Section Standard.
         end.
 
       Definition getSLStatement (sti: @VStatementItem vid_t): list stvu :=
-        List.filter (fun p => List.existsb (vid_eqb p) (getSLStatementWrites sti))
+        List.filter (fun p => negb (List.existsb (vid_eqb p) (getSLStatementWrites sti)))
           (getSLStatementReads sti).
 
       Definition getSLModuleInsMInput (ivids: list vid_t) (npc: @VNamedPortConn vid_t): list stvu :=
@@ -198,7 +222,7 @@ Section Standard.
                                       end
                                  else nil
         | VNamedPortConnE vid ie => if List.existsb (vid_eqb vid) ovids
-                                    then (getSLExpr ie)
+                                    then (getSLWriteExpr ie)
                                     else nil
         | VNamedPortConnW => nil
         end.
@@ -223,7 +247,7 @@ Section Standard.
         match mins with
         | VModuleInsOne mid params (VHierInsOne iid (VPortConnsNamed npcs)) =>
             match mtrss mid with
-            | Sret mtrs => getSLModuleInsMOutputs mtrs.(mtrs_input_vids) npcs
+            | Sret mtrs => getSLModuleInsMOutputs mtrs.(mtrs_output_vids) npcs
             | Fail _ => nil
             end
         end.
@@ -315,7 +339,7 @@ Section Standard.
 
         Definition getProcsAssign (a: @VAssign vid_t): Processes :=
           match a with
-          | VAssignO lv e => [{| proc_trig := TrigStv (getSLExpr cpos e);
+          | VAssignO lv e => [{| proc_trig := TrigStv (getSLLvalueReads cpos lv ++ getSLExpr cpos e);
                                 proc_pos := cpos;
                                 proc_evu := EvalUnitAssign lv e |}]
           end.
@@ -495,6 +519,16 @@ Section Standard.
             nregion = region1 ++ nev :: region2 ->
             ExecEventRegion ev region nev nregion.
 
+      (** The active event and its NBA update belong to the same process slot. *)
+      Definition NbaSameSlot (act nact nba nnba: Region)
+        (ev: Event) (upd: State): Prop :=
+        exists act1 act2 nba1 nba2 old,
+          length act1 = length nba1 /\
+          act = act1 ++ Some ev :: act2 /\
+          nact = act1 ++ None :: act2 /\
+          nba = nba1 ++ old :: nba2 /\
+          nnba = nba1 ++ Some (EventUpd upd) :: nba2.
+
       Definition EventUpdClk (ev: Event): Prop :=
         match ev with
         | EventClkPosedge => True
@@ -531,6 +565,7 @@ Section Standard.
           execEvalEvent s1 cpos evu = Sret (uacts, unbas) ->
           ExecEventRegion (Some (EventEval false cpos evu)) act None nact ->
           ExecEventRegion curNba nba (Some (EventUpd unbas)) nnba ->
+          NbaSameSlot act nact nba nnba (EventEval false cpos evu) unbas ->
           ExecEvent s1 act nba s1 nact nnba.
 
       Inductive ExecEvents:
@@ -763,6 +798,16 @@ Section Standard.
     Proof.
       intros ev act nev nact Hregion; destruct Hregion; subst.
       apply in_or_app; right; left; reflexivity.
+    Qed.
+
+    Lemma ExecEventRegion_nilR_no_some: forall procs ev act nev,
+      ExecEventRegion ev act (Some nev) (nilR procs) -> False.
+    Proof.
+      intros procs ev act nev Hregion; inversion Hregion; subst.
+      assert (Hin: In (Some nev) (nilR procs)).
+      { match goal with Heq: nilR procs = _ |- _ => rewrite Heq end.
+        apply in_or_app; right; left; reflexivity. }
+      apply in_map_iff in Hin; destruct Hin as [proc [Heq _]]; discriminate.
     Qed.
 
     Lemma ExecEvent_has_event : forall procs s act nba s' act' nba',

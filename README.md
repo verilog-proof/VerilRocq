@@ -80,13 +80,23 @@ We provide the main correspondences between our paper and the artifact source co
 
 ### Section 4. Equivalence Between the Standard and Our Semantics
 
-- 4.2 Equivalence Proof: `src/Lang/Equiv/*.v`
-  + Lemma 4.1 (Confluence): `eval_ugraph_confl_state_eq` in `UpdGraph.v`:L1531
-    * Note that while the paper presents the equivalence between the standard semantics and ours directly, and thus the confluence lemma is stated with respect to the standard semantics, in the actual proof we use so-called update graphs (`ugraph` in our code) as an intermediate bridge between the two. Accordingly, the confluence lemma is stated for the update graphs.
-  + Lemma 4.2: `Theorem stf_implies_std` in `StfStd.v`:L502
-  + Lemma 4.3: `Theorem std_implies_stf` in `StfStd.v`:L522
-  + Theorem 4.4 (Equivalence): `Theorem stf_std_equiv` in `StfStd.v`:L540
-  + Note that `stateOf` and `trsF` are defined as functions in the paper, whereas in the artifact they are defined as `StateOf` and `TrsF`, respectively, as relations. This is simply because our state-transition function is defined as a fixpoint, and in the actual code, the fixpoint is represented as an inductive relational predicate.
+The equivalence proof in this branch is in `src/Lang/Equiv/*.v`.
+
+- `executable_clock_equiv` in `ClockEquivalence.v` relates the fixed point of the module's executable `trsVModuleDecl` evaluator, followed by `trsNext`, to an input time slot followed by a clock time slot in `Standard.v`. `ExecutableTrsF` merges the computed updates with the old registers, preserving fields left unwritten. The theorem derives the next flop bindings and their transition relation.
+- `flat_module_lfp` and `flat_module_rep` in `ModuleBridge.v` connect `TrsProcsRep` to the evaluator's `LFP` and finite `trsM_iff_rep` iterations. The `FlatModule` fragment permits ports, always blocks, single identifier continuous assignments, single uninitialized net/variable declarations, assertions, and instances. Parameter ports and generate blocks are outside this fragment.
+- The hypotheses are `ModuleWf` and `ClockWf`. `ModuleWf` supplies the update graph, its ordering and dependency conditions, and the input/flop domains. `ClockWf` checks local sampling, disjoint update slots, validity of the merged next register state, and an `UpdateCompletion` witness. Clocked processes currently require nonempty update-binding lists; a binding can contain `HMapEmpty` to preserve its old value. These conditions have not been derived for every module covered by the paper's source-level guidelines.
+- `module_process_settled` derives each process's active-state stability from `ModuleWf` and a source fixed point. `module_clock_plan` and `clock_wf_of_outputs` use this result to construct the sampling plan from local NBA outputs, so combinational stability need not be supplied as another hypothesis.
+- `completion_slot_iff` in `UpdateCompletion.v` proves that partial updates and their completed register values have the same time-slot executions. Its witness checks sensitivity keys, update effects, and domain preservation under individual updates and process outputs. The scheduling equivalence follows from these local checks.
+- `ClockSampling.v` proves that every completed clock active region produces the sampled NBA updates. `NbaSameSlot` in `Standard.v` places each update in its originating process's NBA slot, preventing one process from overwriting another process's pending update.
+- `ClockExamples.v` constructs both well-formedness witnesses for two registers with `q <= r` and `r <= q`, applies `executable_clock_equiv`, and proves that every completed clock time slot swaps their values.
+- `AssumptionExamples.v` constructs `ModuleWf` and `ClockWf` for `always_ff @(posedge clk) if (en) q <= d` and applies the general executable equivalence theorem. For every completed clock schedule, `en = 0` retains `q` and `en = 1` loads `d`; input changes are also covered. It includes regressions for `always_comb` sensitivity extraction.
+- `MixedExamples.v` constructs both witnesses for `always_comb y = q; always_ff @(posedge clk) q <= d`, derives its clock sampling plan, and applies `executable_clock_equiv`. Its clock-result theorem includes the combinational evaluation after the NBA update: both `q` and `y` become `d`.
+
+The graph is ordered by whole processes. This is stricter than an acyclic signal dependency graph. `GroupedCombinationalChain` in `AssumptionExamples.v` has `always_comb begin x = a; z = y; end` and `always_comb y = x`. Its signal dependencies form `a -> x -> y -> z`, but its process graph admits no rank. The executable evaluator also remains at the input-only seed for every iteration count: the missing `y` causes the first block to fail and discard its partial result for `x`. Supporting this case requires a change to block evaluation or a proved normalization of blocks.
+
+`IndexedRead` checks the sensitivity and process-success conditions for `y = a[i]`. Sensitivity extraction includes index reads and separates them from lvalue writes; instance write extraction uses output-port metadata. Packed bit writes have a separate evaluator limitation: the proved `packed_bit_update_ignored` example shows that the current merge leaves `q` unchanged for `q[0] <= 1` when `q` is represented by `HMapBits`. Both semantics share this update evaluator, so their equivalence does not by itself establish the evaluator's agreement with IEEE Verilog for such writes.
+
+The supporting stabilization theorem `stf_std_equiv` in `StfStd.v` compares states after supplied input and flop injections. Confluence is proved through update graphs by `eval_ugraph_confl_state_eq` in `UpdGraph.v`.
 
 ### Section 5. Modular Verification of a Pipelined RISC-V Processor
 
@@ -108,4 +118,3 @@ Reusability Guide
 - Users may want to design Verilog modules and define their state-transition functions by following the examples in `src/Ex/RvCore/Mem.v`. For example:
   + `ICache.M.m` contains a Verilog module definition, supported by rich notation provided by the framework.
   + `ICache.mtrs` defines the state-transition function for the module.
-
