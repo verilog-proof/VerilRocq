@@ -25,7 +25,7 @@ Section SourceProgress.
     unfold UGraphUpdFull in Hfull; rewrite Forall_app in Hfull.
     destruct Hfull as [_ Hfull]; inversion Hfull; subst.
     assert (Honce: updOnce un = false) by congruence.
-    unfold unseen; rewrite !filter_app, !length_app; simpl; rewrite Honce; simpl; lia.
+    unfold unseen; rewrite !filter_app, !app_length; simpl; rewrite Honce; simpl; lia.
   Qed.
 
   Lemma source_trace_progress: forall ug s next s',

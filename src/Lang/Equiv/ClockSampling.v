@@ -178,7 +178,7 @@ Section ClockSampling.
     - split.
       + apply clock_queue_app; [exact Hpre|]. constructor; [|exact Hpost].
         destruct bindings; [contradiction|constructor].
-      + unfold pendingCount; rewrite !filter_app, !length_app; simpl; lia.
+      + unfold pendingCount; rewrite !filter_app, !app_length; simpl; lia.
   Qed.
 
   Theorem clock_queue_progress: forall s rows act nba,
